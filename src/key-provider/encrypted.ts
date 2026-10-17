@@ -6,26 +6,49 @@ import { sealBlob, openBlob } from '../store/encryption.js';
 import type { EncryptedBlobStore } from '../store/index.js';
 import type { KeyProvider } from './index.js';
 import { RuntimeError } from '../errors.js';
-/** Host-only import/unlock. Wrapped signers check the current lock generation on every use. */
+/** Host-only vault API. No key or decrypted record operation is exposed as a tool. */
 export class EncryptedKeyProvider implements KeyProvider {
   readonly id = 'encrypted';
   private key?: Uint8Array;
   private generation = 0;
-  constructor(private readonly store: EncryptedBlobStore) {}
-  unlock(key: Uint8Array): void { if (key.length !== 32) throw new RuntimeError('invalid_encryption_key'); this.lock(); this.key=new Uint8Array(key); }
-  lock(): void { this.key?.fill(0); this.key=undefined; this.generation++; }
+  private expiresAt = 0;
+  constructor(private readonly store: EncryptedBlobStore, private readonly now = Date.now) {}
+  unlock(key: Uint8Array, expiresAt = this.now() + 300_000): void {
+    if (key.length !== 32 || !Number.isFinite(expiresAt) || expiresAt <= this.now()) throw new RuntimeError('invalid_unlock_lease');
+    this.lock(); this.key = new Uint8Array(key); this.expiresAt = expiresAt;
+  }
+  lock(): void { this.key?.fill(0); this.key = undefined; this.generation++; this.expiresAt = 0; }
+  private check(generation = this.generation): Uint8Array {
+    if (this.now() >= this.expiresAt) this.lock();
+    if (!this.key || generation !== this.generation) throw new RuntimeError('vault_locked');
+    return this.key;
+  }
+  async readRecord<T>(id: string): Promise<{ generation: number; value: T } | undefined> {
+    const epoch = this.generation; this.check(epoch);
+    const row = await this.store.load(id);
+    const key = this.check(epoch);
+    return row ? {generation: row.generation, value: JSON.parse(openBlob(row.ciphertext, key, id, row.generation)) as T} : undefined;
+  }
+  async commitRecords(records: readonly {id: string; expectedGeneration: number; value: unknown}[]): Promise<void> {
+    const epoch = this.generation, key = this.check(epoch);
+    const mutations = records.map(r => ({id:r.id, expectedGeneration:r.expectedGeneration,
+      ciphertext:sealBlob(JSON.stringify(r.value), key, r.id, r.expectedGeneration + 1)}));
+    this.check(epoch);
+    await this.store.commit(mutations); this.check(epoch);
+  }
   async importJwk(ref: string, method: string, privateJwk: JsonWebKey): Promise<void> {
-    if (!this.key) throw new RuntimeError('vault_locked');
-    await createJwkOanSigner(method,privateJwk);
-    await this.store.compareAndSwap(ref,0,sealBlob(JSON.stringify({method,privateJwk}),this.key,ref,1));
+    const epoch = this.generation; this.check(epoch);
+    const snapshot = structuredClone({method, privateJwk});
+    await createJwkOanSigner(snapshot.method, snapshot.privateJwk); this.check(epoch);
+    await this.commitRecords([{id:ref, expectedGeneration:0, value:snapshot}]);
   }
   async getSigner(ref: string): Promise<OanSigner> {
-    if (!this.key) throw new RuntimeError('vault_locked');
-    const generation=this.generation, row=await this.store.load(ref);
-    if (!row || !this.key || generation !== this.generation) throw new RuntimeError('vault_locked_or_key_missing');
-    const value=JSON.parse(openBlob(row.ciphertext,this.key,ref,row.generation));
-    const signer=await createJwkOanSigner(value.method,value.privateJwk);
-    const check=() => { if (!this.key || generation !== this.generation) throw new RuntimeError('vault_locked'); };
-    return {keyId:signer.keyId,algorithm:'Ed25519',async publicKey(){check();return signer.publicKey();},async signPreparedInput(bytes){check();return signer.signPreparedInput(bytes);}};
+    const epoch = this.generation; this.check(epoch);
+    const row = await this.readRecord<{method:string; privateJwk:JsonWebKey}>(ref);
+    if (!row) throw new RuntimeError('key_missing');
+    const signer = await createJwkOanSigner(row.value.method, row.value.privateJwk); this.check(epoch);
+    const check = () => { this.check(epoch); };
+    return {keyId:signer.keyId, algorithm:'Ed25519', publicKey:async()=>{check(); const result=await signer.publicKey(); check(); return result;},
+      signPreparedInput:async bytes=>{check(); const result=await signer.signPreparedInput(bytes); check(); return result;}};
   }
 }

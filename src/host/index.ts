@@ -11,6 +11,7 @@ export interface IdentityImportBundle {
   identity: OanIdentityRecord | import('@openagenet/oan-sdk-ts/protocol-types').DidOanIdentity;
   didDocument: unknown;
   registrationVc?: unknown;
+  resourcePackage?: import('@openagenet/oan-sdk-ts/protocol-types').ResourcePackage;
   sources: Array<{ kind: 'discovery' | 'resource-package'; uri: string; digest?: string }>;
 }
 

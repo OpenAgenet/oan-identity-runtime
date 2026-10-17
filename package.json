@@ -29,13 +29,14 @@
     "test:lab": "npm run build && node --test test-cases/lab/*.test.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@openagenet/oan-sdk-ts": "file:../oan-sdk-ts",
     "jose": "^6.1.0"
   },
   "devDependencies": {
     "@types/node": "^26.0.0",
-    "typescript": "^6.0.3",
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
   },
   "files": [
     "dist",

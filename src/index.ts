@@ -17,6 +17,7 @@ export * from './session/handshake.js';
 export * from './evidence/index.js';
 export * from './evidence/pinned-root.js';
 export * from './audit/index.js';
+export * from './audit/encrypted.js';
 export * from './publication/index.js';
 export * from './profiles/index.js';
 export * from './verification/index.js';
@@ -29,3 +30,7 @@ export * from './key-provider/registry.js';
 
 export * from './directory/index.js';
 export * from './invocation/index.js';
+
+export * from './host/vault.js';
+export * from './tools/host.js';
+export * from './publication/workflow.js';
