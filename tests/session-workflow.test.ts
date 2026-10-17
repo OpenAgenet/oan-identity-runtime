@@ -120,6 +120,30 @@ test('G3: evidence revision invalidates recovered sessions and locked vault deni
     p.a.keys.lock();await assert.rejects(p.a.workflow.inspect(caller,h.sessionRef),/vault_locked/);
   }finally{p.close();}
 });
+test('G3: closed sessions retain a tombstone, old transcripts cannot re-enter, and unavailable evidence fails closed',async()=>{
+  const p=await pair();try{
+    const h=await p.a.workflow.begin(caller,p.a.input);
+    await p.b.workflow.accept(caller,p.b.input,h.outgoing);
+    await p.a.workflow.close(caller,h.sessionRef);
+    await p.b.workflow.close(caller,h.sessionRef);
+    assert.equal((await p.a.workflow.inspect(caller,h.sessionRef)).state,'closed');
+    await assert.rejects(p.a.workflow.advance(caller,h.sessionRef,h.outgoing),/session_closed/);
+    await assert.rejects(p.b.workflow.accept(caller,p.b.input,h.outgoing),/generation_conflict/);
+    const q=await pair();try{
+      const pending=await q.a.workflow.begin(caller,q.a.input);q.unavailable();
+      await assert.rejects(q.a.workflow.inspect(caller,pending.sessionRef),/evidence unavailable/);
+    }finally{q.close();}
+  }finally{p.close();}
+});
+test('G3: public handshake input rejects private material, oversized messages, and malformed envelopes',async()=>{
+  const p=await pair();try{
+    const h=await p.a.workflow.begin(caller,p.a.input);
+    const privateMessage=structuredClone(h.outgoing) as any;privateMessage.body={...(privateMessage.body as Record<string,unknown>),privateKeyJwk:{d:'secret'}};
+    await assert.rejects(p.b.workflow.accept(caller,p.b.input,privateMessage),/invalid_handshake_message/);
+    await assert.rejects(p.b.workflow.accept(caller,p.b.input,{...h.outgoing,jws:h.outgoing.jws+'x'.repeat(20000)} as any),/invalid_handshake_message|handshake_too_large/);
+    await assert.rejects(p.b.workflow.accept(caller,p.b.input,{...h.outgoing,extra:'spoof'} as any),/invalid_handshake_message/);
+  }finally{p.close();}
+});
 test('G4: actual request/result binding, nonce protection and independent operation journal gate handler effects',async()=>{
   const p=await pair();let effects=0;try{
     const {h}=await handshake(p),object={name:'echo',arguments:{text:'one'}};
@@ -148,6 +172,18 @@ test('G4: response tampering/correlation and unknown dispatch never expose trust
     let calls=0;await assert.rejects(p.a.invocation.execute(caller,{sessionRef:h.sessionRef,payload:object},async()=>{calls++;throw new Error('response lost');}),/invocation_result_unknown/);assert.equal(calls,1);
   }finally{p.close();}
 });
+test('G4: native metadata collisions and invocation journal access fail closed',async()=>{
+  const p=await pair();try{
+    const {h}=await handshake(p),a=new NativeSynchronousBoundary(p.a.invocation,caller,'_meta');
+    const signed=await p.a.invocation.prepare(caller,h.sessionRef,'metadata',{});
+    assert.throws(()=>attachOanMetadata({_meta:{[runtimeMetadataKey()]:{}}},'_meta',signed),/reserved_identity_metadata/);
+    assert.throws(()=>detachOanMetadata({_meta:[] as any},'_meta'),/protection_required|invalid_protocol_metadata/);
+    await p.b.invocation.receive(caller,signed,{},async()=>({ok:true}));
+    await assert.rejects(p.b.invocation.inspect({...caller,tenantId:'other'},'metadata'),/invocation_access_denied/);
+    await assert.rejects(p.b.invocation.receive({...caller,tenantId:'other'},signed,{},async()=>({})),/policy_denied|session_access_denied/);
+    void a;
+  }finally{p.close();}
+});
 test('G3 tools: only installed workflow is advertised and reserved key/caller injection is rejected',async()=>{
   const p=await pair();try{
     const host=new RuntimeToolHost({caller,directory:new ResourceDirectory(),verification:p.a.workflow});
@@ -160,3 +196,5 @@ test('G3 tools: only installed workflow is advertised and reserved key/caller in
     await assert.rejects(p.a.workflow.advance(caller,result.sessionRef,{profile:'oan-session-v1',kind:'client-hello',body:null,jws:'x'}),/invalid_handshake_message/);
   }finally{p.close();}
 });
+
+function runtimeMetadataKey(){return 'openagenet.xyz/oan-message-v1';}
