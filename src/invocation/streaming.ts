@@ -29,7 +29,9 @@ export class StreamingInvocation {
   private eventIntent(sessionId: string, requestId: string, payload: unknown, event: StreamEventInput): SignIntent {
     return { identityRef: this.options.identityRef, audienceDid: this.options.peerDid, purpose: 'event', protocol: 'a2a', protocolVersion: this.options.profile.protocolVersion,
       operation: this.options.profile.operation, serviceRef: this.options.profile.serviceRef, requestDigest: event.requestDigest, sessionId, requestId,
-      stream: { taskId: event.taskId, sequence: event.sequence, previousDigest: event.previousDigest, state: event.state, artifactDigest: event.artifactDigest, callbackDid: event.callbackDid }, payload };
+      stream: { taskId: event.taskId, sequence: event.sequence, previousDigest: event.previousDigest, state: event.state,
+        ...(event.artifactDigest !== undefined ? { artifactDigest: event.artifactDigest } : {}),
+        ...(event.callbackDid !== undefined ? { callbackDid: event.callbackDid } : {}) }, payload };
   }
   async prepareEvent(caller: CallerContext, sessionId: string, event: StreamEventInput, payload: unknown): Promise<{ message: SignedMessage; event: StreamEventInput }> {
     const input = structuredClone(event), object = structuredClone(payload), bound = structuredClone(caller);
