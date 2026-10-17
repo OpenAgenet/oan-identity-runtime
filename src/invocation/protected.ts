@@ -15,12 +15,14 @@ export async function verifyProtectedInvocation(message: SignedMessage, input: {
   sessions: SessionManager; replay: ReplayStore; resolvePeer: (did: string) => Promise<VerifiedPeer>;
   authorize: () => Promise<void>;
 }) {
+  const {sessions,replay,resolvePeer,authorize,...binding}=input;
+  input={...structuredClone(binding),sessions,replay,resolvePeer,authorize};
   const snapshot = structuredClone(message), payload = structuredClone(input.payload);
   await input.authorize();
   const session = await input.sessions.requireAuthenticated(input.sessionId, input.localDid, input.peerDid);
   if (session.binding && (session.binding.serviceRef !== input.serviceRef || session.binding.protocol !== input.protocol || session.binding.protocolVersion !== input.protocolVersion)) throw new RuntimeError('session_scope_mismatch');
   const peer = await input.resolvePeer(input.peerDid);
-  if (peer.did !== input.peerDid || peer.validUntil <= Date.now() || await digestJson(snapshot.payload) !== await digestJson(payload)) throw new RuntimeError('invocation_binding_or_evidence_invalid');
+  if (peer.did !== input.peerDid || !Number.isFinite(peer.validUntil) || peer.validUntil <= Date.now() || await digestJson(snapshot.payload) !== await digestJson(payload)) throw new RuntimeError('invocation_binding_or_evidence_invalid');
   await verifyPinnedMessage(snapshot, { senderDid: input.peerDid, audienceDid: input.localDid,
     verificationMethod:peer.verificationMethod,publicKeyJwk:peer.publicKeyJwk,
     serviceRef:input.serviceRef,protocolVersion:input.protocolVersion,operation:input.operation,

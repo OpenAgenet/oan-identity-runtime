@@ -6,6 +6,7 @@ import type { ResourceDirectory, RegistrationWorkflow } from '../directory/index
 import type { IdentityRuntime } from '../runtime.js';
 import type { EvidenceVerifier } from '../evidence/index.js';
 import { RuntimeError } from '../errors.js';
+import type {IdentityVerificationWorkflow} from '../session/index.js';
 
 export interface ToolDefinition { name:string; description:string; inputSchema:{type:'object';properties:Record<string,unknown>;required?:string[];additionalProperties:false} }
 export interface ToolHostOptions {
@@ -15,11 +16,14 @@ export interface ToolHostOptions {
   runtime?:IdentityRuntime;
   evidence?:{verifier:EvidenceVerifier;rootDid:string};
   registration?:RegistrationWorkflow & {inspect(caller:CallerContext,draftId:string):Promise<unknown>};
+  verification?:IdentityVerificationWorkflow;
+  /** Host maps a public route reference to a pinned peer/profile/transport, never a tool URL. */
+  invocation?:{execute(caller:CallerContext,input:{routeRef:string;sessionRef:string;requestId?:string;payload:unknown}):Promise<unknown>};
 }
 const definition=(name:string,description:string,properties:Record<string,unknown>,required:string[]=[]):ToolDefinition=>
   ({name,description,inputSchema:{type:'object',properties,required,additionalProperties:false}});
 const text={type:'string',minLength:1};
-/** Installed L0/L1 handlers only. No import, unlock, export, arbitrary sign or pretend G3 tools. */
+/** Installed handlers only. No import, unlock, export, arbitrary signing or peer-supplied routing. */
 export class RuntimeToolHost {
   private readonly caller:CallerContext;
   constructor(private readonly options:ToolHostOptions){
@@ -36,6 +40,15 @@ export class RuntimeToolHost {
     if(this.options.registration)tools.push(definition('resource.register','Prepare a stable candidate, then submit only with host approval. Never pass key paths.',
       {action:{type:'string',enum:['prepare','submit']},identityRef:text,description:{type:'object'},draftId:text},['action']),
       definition('publication.inspect','Inspect/reconcile an existing publication without creating an identity.',{draftId:text},['draftId']));
+    if(this.options.verification)for(const prefix of ['session','identity.verification']){
+      tools.push(definition(prefix+'.begin','Begin caller-scoped mutual identity verification; exchange public outgoing only.',{input:{type:'object'}},['input']),
+        definition(prefix+'.accept','Accept a public hello under a host-approved identity/peer/scope.',{input:{type:'object'},message:{type:'object'}},['input','message']),
+        definition(prefix+'.advance','Verify the next signed message. Completion requires final confirmation.',{sessionRef:text,message:{type:'object'}},['sessionRef','message']),
+        definition(prefix+'.inspect','Inspect this caller\'s local verification state.',{sessionRef:text},['sessionRef']),
+        definition(prefix+'.close','Close this caller\'s session without removing replay protection.',{sessionRef:text},['sessionRef']));
+    }
+    if(this.options.invocation)tools.push(definition('invocation.execute','Call a host-configured protected route; never retries an uncertain business call.',
+      {routeRef:text,sessionRef:text,requestId:text,payload:{type:'object'}},['routeRef','sessionRef','payload']));
     return tools;
   }
   async call(name:string,input:unknown):Promise<unknown>{
@@ -54,6 +67,15 @@ export class RuntimeToolHost {
     }
     rejectSecrets(args);
     const caller=structuredClone(this.caller);
+    if(name.startsWith('session.') || name.startsWith('identity.verification.')){
+      const operation=name.split('.').at(-1);
+      const workflow=this.options.verification!;
+      if(operation==='begin')return workflow.begin(caller,args.input);
+      if(operation==='accept')return workflow.accept(caller,args.input,args.message);
+      if(operation==='advance')return workflow.advance(caller,args.sessionRef,args.message);
+      if(operation==='inspect')return workflow.inspect(caller,args.sessionRef);
+      await workflow.close(caller,args.sessionRef);return {closed:true};
+    }
     switch(name){
       case 'resource.discover':return this.options.directory.discover(args.query??{});
       case 'resource.resolve':return this.options.directory.resolve(args.resourceDid);
@@ -77,6 +99,7 @@ export class RuntimeToolHost {
             status:result.response.status};
         }
       case 'publication.inspect':return this.options.registration!.inspect(caller,args.draftId);
+      case 'invocation.execute':return this.options.invocation!.execute(caller,{routeRef:args.routeRef,sessionRef:args.sessionRef,...(args.requestId?{requestId:args.requestId}:{}),payload:args.payload});
     }
   }
 }

@@ -27,8 +27,8 @@ test('third-party directory configuration works and network errors are not authe
     return new Response('{}', { status: 503 });
   } });
   await assert.rejects(directory.discover({}), /503/);
-  assert.equal(FRAMEWORK_CAPABILITIES.mutualAuthentication, false);
-  assert.equal(FRAMEWORK_CAPABILITIES.protectedInvocation, false);
+  assert.equal(FRAMEWORK_CAPABILITIES.mutualAuthentication, true);
+  assert.equal(FRAMEWORK_CAPABILITIES.protectedInvocation, true);
   assert.equal(FRAMEWORK_CAPABILITIES.registrationWorkflow, true);
   assert.equal(FRAMEWORK_CAPABILITIES.skillFreeToolServer, true);
   assert.equal(FRAMEWORK_CAPABILITIES.persistentKeyProvider, true);

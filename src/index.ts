@@ -14,6 +14,7 @@ export * from './store/encryption.js';
 export * from './policy/index.js';
 export * from './session/index.js';
 export * from './session/handshake.js';
+export * from './session/workflow.js';
 export * from './evidence/index.js';
 export * from './evidence/pinned-root.js';
 export * from './audit/index.js';
@@ -25,6 +26,9 @@ export * from './tools/index.js';
 export * from './host/index.js';
 export * from './host/verify-ipc.js';
 export * from './invocation/protected.js';
+export * from './invocation/synchronous.js';
+export * from './invocation/native.js';
+export * from './invocation/a2a.js';
 
 export * from './key-provider/registry.js';
 

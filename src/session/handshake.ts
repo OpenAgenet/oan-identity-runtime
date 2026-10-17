@@ -11,6 +11,7 @@ import { RuntimeError } from '../errors.js';
 export interface HandshakeScope {
   initiatorDid: string; responderDid: string; serviceRef: string;
   protocol: 'mcp' | 'a2a' | 'http'; protocolVersion: string;
+  verificationPurpose?: string; verificationScope?: string;
 }
 export interface HandshakeBody extends HandshakeScope {
   profile: 'oan-session-v1'; kind: 'client-hello' | 'server-proof' | 'client-proof' | 'session-confirmed';
@@ -20,17 +21,26 @@ export interface HandshakeBody extends HandshakeScope {
 export interface HandshakeMessage { body: HandshakeBody; jws: string }
 export interface VerifiedPeer {
   did: string; verificationMethod: string; publicKeyJwk: JsonWebKey; validUntil: number;
+  /** Verified package/document/trust-policy digest, when supplied by the host resolver. */
+  evidenceBinding?: string;
+  evidenceChecks?:Array<{name:string;status:'valid'|'invalid'|'unknown'|'not_applicable';source?:string}>;
 }
-type State = { role: 'initiator' | 'responder'; scope: HandshakeScope; last: HandshakeMessage; stage: 'hello' | 'server' | 'client' | 'completed'; acceptedClient?: string; confirmation?: HandshakeMessage };
+export type HandshakeState = { role: 'initiator' | 'responder'; scope: HandshakeScope; last: HandshakeMessage; stage: 'hello' | 'server' | 'client' | 'completed'; acceptedClient?: string; confirmation?: HandshakeMessage };
+type State = HandshakeState;
 
 /** One trusted local host owns an instance. Peer keys MUST come from verified evidence.
  * Final confirmation can be resent for the exact client proof until session expiry.
- * Sessions are intentionally invalidated on host restart; replay storage is independent.
+ * This primitive is process-local; DurableIdentityVerification persists trusted state.
  */
 export class MutualHandshake implements SessionManager {
   private readonly states = new Map<string, State>();
   constructor(private readonly localDid: string, private readonly signer: OanSigner,
     private readonly resolvePeer: (did: string) => Promise<VerifiedPeer>, private readonly maxSessions = 1000) {}
+  /** Trusted encrypted host journal only; never accept a state snapshot from a peer/tool. */
+  restore(id:string,state:HandshakeState):void {this.states.set(id,structuredClone(state));}
+  snapshot(id:string):HandshakeState {
+    const state=this.states.get(id);if(!state)throw new RuntimeError('session_not_found');return structuredClone(state);
+  }
   private prune() {
     for (const [id, s] of this.states) if (Date.parse(s.last.body.expiresAt) <= Date.now()) this.states.delete(id);
     if (this.states.size >= this.maxSessions) throw new RuntimeError('session_capacity_exceeded');
@@ -38,7 +48,7 @@ export class MutualHandshake implements SessionManager {
   private async signed(body: HandshakeBody): Promise<HandshakeMessage> {
     const peerDid = this.localDid === body.initiatorDid ? body.responderDid : body.initiatorDid;
     const own = await this.resolvePeer(this.localDid), peer = await this.resolvePeer(peerDid);
-    if (this.signer.keyId !== own.verificationMethod || (await this.signer.publicKey()).x !== own.publicKeyJwk.x || Math.min(own.validUntil, peer.validUntil) <= Date.parse(body.expiresAt)) throw new RuntimeError('handshake_key_or_evidence_invalid');
+    if (own.did!==this.localDid || peer.did!==peerDid || this.signer.algorithm!=='Ed25519' || this.signer.keyId !== own.verificationMethod || (await this.signer.publicKey()).x !== own.publicKeyJwk.x || !Number.isFinite(own.validUntil) || !Number.isFinite(peer.validUntil) || Math.min(own.validUntil, peer.validUntil) <= Date.parse(body.expiresAt)) throw new RuntimeError('handshake_key_or_evidence_invalid');
     const header = base64url.encode(JSON.stringify({ alg: 'EdDSA', kid: this.signer.keyId, typ: 'oan-session-v1+jws' }));
     const input = `${header}.${base64url.encode(canonicalJson(body))}`;
     return { body, jws: `${input}.${base64url.encode(await this.signer.signPreparedInput(new TextEncoder().encode(input)))}` };
@@ -46,7 +56,7 @@ export class MutualHandshake implements SessionManager {
   private async check(message: HandshakeMessage, scope: HandshakeScope, kind: HandshakeBody['kind'], expected: string): Promise<void> {
     if (JSON.stringify(message).length > 16384) throw new RuntimeError('handshake_too_large');
     const b = message.body, peer = await this.resolvePeer(expected), now = Date.now();
-    if (b.profile !== 'oan-session-v1' || b.kind !== kind || !b.sessionId || !b.nonceA || b.initiatorDid === b.responderDid ||
+    if (peer.did!==expected || !Number.isFinite(peer.validUntil) || b.profile !== 'oan-session-v1' || b.kind !== kind || !b.sessionId || !b.nonceA || b.initiatorDid === b.responderDid ||
       Object.keys(scope).some(k => b[k as keyof HandshakeScope] !== scope[k as keyof HandshakeScope]) ||
       !Number.isFinite(Date.parse(b.createdAt)) || !Number.isFinite(Date.parse(b.expiresAt)) || Date.parse(b.createdAt) > now + 30000 ||
       Date.parse(b.expiresAt) <= now || Date.parse(b.expiresAt) - Date.parse(b.createdAt) > 60000 || Date.parse(b.expiresAt) <= Date.parse(b.createdAt) || peer.validUntil <= Date.parse(b.expiresAt) || (kind !== 'client-hello' && !b.nonceB)) throw new RuntimeError('handshake_binding_invalid');
@@ -76,6 +86,9 @@ export class MutualHandshake implements SessionManager {
     const s = this.states.get(id), message = structuredClone(input);
     if (!s) throw new RuntimeError('session_not_found');
     const old = s.last;
+    if(s.stage==='completed' && s.role==='initiator' && await digestJson(message)===await digestJson(old)) {
+      await this.requireAuthenticated(id,this.localDid,s.scope.responderDid);return {state:'authenticated'};
+    }
     if (s.stage === 'completed' && s.role === 'responder' && s.acceptedClient === await digestJson(message) && s.confirmation) {
       await this.requireAuthenticated(id,this.localDid,s.scope.initiatorDid);
       return {state:'authenticated',reply:structuredClone(s.confirmation)};
@@ -97,7 +110,7 @@ export class MutualHandshake implements SessionManager {
     const s = this.states.get(id);
     if (!s || localDid !== this.localDid || s.stage !== 'completed' || peerDid !== (s.role === 'initiator' ? s.scope.responderDid : s.scope.initiatorDid) || Date.parse(s.last.body.expiresAt) <= Date.now()) throw new RuntimeError('session_not_authenticated');
     const peer = await this.resolvePeer(peerDid), own = await this.resolvePeer(localDid);
-    if (Math.min(peer.validUntil,own.validUntil) <= Date.now()) throw new RuntimeError('session_evidence_expired');
+    if (peer.did!==peerDid || own.did!==localDid || !Number.isFinite(peer.validUntil) || !Number.isFinite(own.validUntil) || Math.min(peer.validUntil,own.validUntil) <= Date.now()) throw new RuntimeError('session_evidence_expired');
     return {id,localDid,peerDid,state:'authenticated',expiresAt:s.last.body.expiresAt, binding: { serviceRef:s.scope.serviceRef, protocol:s.scope.protocol, protocolVersion:s.scope.protocolVersion }};
   }
   close(id: string): void { this.states.delete(id); }

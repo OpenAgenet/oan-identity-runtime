@@ -38,7 +38,11 @@ export class SqliteReplayStore implements ReplayStore {
 }
 export interface SessionRecord { id: string; localDid: string; peerDid: string; expiresAt: string; state: 'challenged' | 'authenticated' | 'closed'; binding?: { serviceRef: string; protocol: string; protocolVersion: string } }
 /** The evidence verifier, not an adapter, must approve authentication transitions. */
-export interface SessionManager { requireAuthenticated(id: string, localDid: string, peerDid: string): Promise<SessionRecord> }
+export interface SessionManager {
+  requireAuthenticated(id: string, localDid: string, peerDid: string): Promise<SessionRecord>;
+  /** Durable multi-caller hosts additionally bind sessions to the authenticated owner. */
+  requireAuthenticatedForCaller?(caller:import('../policy/index.js').CallerContext,id:string,localDid:string,peerDid:string):Promise<SessionRecord>;
+}
 
 /** Separate from business signing to avoid requiring authentication before the handshake. */
 export interface SessionHandshake {
@@ -59,6 +63,9 @@ export interface IdentityVerificationScope {
   purpose: string;
   scope: string;
   profile: 'oan-session-v1';
+  serviceRef: string;
+  protocol: 'http' | 'mcp' | 'a2a';
+  protocolVersion: string;
 }
 export type IdentityEvidenceState = 'valid' | 'invalid' | 'unknown' | 'not_applicable';
 export interface IdentityVerificationStatus {
@@ -74,6 +81,8 @@ export interface IdentityVerificationStatus {
   peerConfirmation: 'pending' | 'verified';
   /** A completed handshake does not protect subsequent business traffic. */
   businessProtection: 'not_established';
+  /** Last locally signed public message for safe recovery; never trusted journal state. */
+  outgoing?: PublicIdentityHandshakeMessage;
 }
 /** Bounded, schema-validated public messages only. No identity bundles or local refs. */
 export interface PublicIdentityHandshakeMessage {
@@ -81,8 +90,9 @@ export interface PublicIdentityHandshakeMessage {
   kind: 'client-hello' | 'server-proof' | 'client-proof' | 'session-confirmed';
   /** Concrete wire schema/signature/transcript validation remains an implementation gate. */
   body: unknown;
+  jws: string;
 }
-/** Common core for Skill, CLI and MCP. No real handshake implementation is provided yet.
+/** Common core for Skill, CLI and MCP, implemented by DurableIdentityVerification.
  * Caller is authenticated by the local Host; transport only exchanges public messages.
  * finish requires signed SessionConfirmed, never a natural-language acknowledgement.
  */

@@ -3,7 +3,10 @@
 // Email: jlxufly@gmail.com
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadLab, host, ReplayCache, verifyPinnedMessage } from './fixtures.mjs';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {resolve} from 'node:path';
+import { loadLab, host, ReplayCache, verifyPinnedMessage, labRoot } from './fixtures.mjs';
 import { digestJson, ResourceDirectory, FRAMEWORK_CAPABILITIES } from '../../dist/index.js';
 
 const pairs = [['a2a-a','a2a-b','a2a'],['a2a-b','a2a-a','a2a'],['a2a-a','mcp','mcp'],['hermes-a','hermes-b','a2a'],['hermes-b','hermes-a','a2a']];
@@ -62,9 +65,18 @@ test('RT-05 optional official Discovery read-only check for all five resource bi
   }
 });
 
-test('RT-06 capabilities do not claim real mutual authentication or protected invocation',()=>{
-  assert.equal(FRAMEWORK_CAPABILITIES.mutualAuthentication,false);
-  assert.equal(FRAMEWORK_CAPABILITIES.protectedInvocation,false);
+test('RT-06 capabilities reflect implemented synchronous workflows',()=>{
+  assert.equal(FRAMEWORK_CAPABILITIES.mutualAuthentication,true);
+  assert.equal(FRAMEWORK_CAPABILITIES.protectedInvocation,true);
 });
-test('RT-07 real four-message mutual verification via Hermes/Skill',{skip:'BLOCKED: IdentityVerificationWorkflow/SessionHandshake implementation and trusted evidence verifier required'},()=>{});
-test('RT-08 persistent replay rejection after Runtime restart',{skip:'BLOCKED: durable ReplayStore host implementation required; fixture reload is not replay persistence'},()=>{});
+
+test('RT-07 real four-message mutual verification via Hermes/Skill',{skip:!process.env.OAN_HERMES_ROOT || !process.env.OAN_HERMES_PYTHON?'Configure pinned Hermes source/Python for native host acceptance':false,timeout:300000},async()=>{
+  const {stdout}=await promisify(execFile)(process.execPath,[resolve(labRoot,'scripts/run-integration.mjs'),'skill-hermes-mutual','--require-ready'],{cwd:labRoot,env:{...process.env,OAN_LAB_TIMEOUT_MS:'300000'},timeout:300000});
+  assert.equal(JSON.parse(stdout).status,'passed');
+});
+test('RT-08 durable disk/process recovery and replay acceptance',{timeout:60000},async()=>{
+  const env={...process.env};delete env.NODE_TEST_CONTEXT;
+  const {stdout}=await promisify(execFile)(process.execPath,['--test',resolve(labRoot,'test-cases/g3-g4/synchronous.test.mjs')],{cwd:labRoot,env,timeout:60000});
+  // Node 22 emits the summary with the ℹ marker; older runners used #.
+  assert.match(stdout,/(?:#|ℹ) fail 0/);assert.match(stdout,/(?:#|ℹ) skipped 0/);
+});

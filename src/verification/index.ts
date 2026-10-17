@@ -40,13 +40,15 @@ export async function verifyPinnedMessage(message: SignedMessage, options: {
   sessionId: string; requestId: string; purpose: SignedMessage['context']['purpose'];
   protocol: SignedMessage['context']['protocol']; replay: ReplayStore; now?: number;
 }): Promise<{ signatureValid: true; registrationTrust: 'not_checked' }> {
+  const {replay,...binding}=options;
+  options={...structuredClone(binding),replay};
   const snapshot = structuredClone(message);
   const { context, operation, payload, signature, serviceRef, protocolVersion, requestDigest, stream } = snapshot;
   validateMessageBinding({ purpose: context.purpose, serviceRef, protocolVersion, requestDigest, stream });
   const now = options.now ?? Date.now();
   const created = Date.parse(context.createdAt), expires = Date.parse(context.expiresAt);
   if (context.profile !== 'oan-message-v1' || context.senderDid !== options.senderDid || context.audienceDid !== options.audienceDid || context.sessionId !== options.sessionId || context.requestId !== options.requestId || context.purpose !== options.purpose || context.protocol !== options.protocol || signature.verificationMethod !== options.verificationMethod || protocolVersion !== options.protocolVersion || serviceRef !== options.serviceRef || requestDigest !== options.requestDigest || operation !== options.operation || !operation || !context.messageId || !context.nonce) throw new RuntimeError('message_binding_mismatch');
-  if (!Number.isFinite(created) || !Number.isFinite(expires) || created > now + 30000 || expires <= now || expires <= created || expires - created > 60000) throw new RuntimeError('message_time_invalid');
+  if (!Number.isFinite(now) || !Number.isFinite(created) || !Number.isFinite(expires) || created > now + 30000 || expires <= now || expires <= created || expires - created > 60000) throw new RuntimeError('message_time_invalid');
   if (context.payloadDigest !== await digestJson(payload)) throw new RuntimeError('payload_digest_mismatch');
   const key = await importJWK(options.publicKeyJwk, 'EdDSA');
   const bytes = new TextEncoder().encode(canonicalJson({ context, operation, serviceRef, protocolVersion,

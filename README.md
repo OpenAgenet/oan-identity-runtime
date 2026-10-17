@@ -22,7 +22,7 @@ The first Runtime release is a local process or embeddable library responsible f
 - managing challenges, sessions, nonces, replay protection, audit records, and publication recovery;
 - providing MCP, A2A, and ordinary HTTP profiles first.
 
-ANP adaptation and dedicated OpenClaw plugins are deferred. Skill-enabled OpenClaw/Hermes agents are planned users of the community Skill verification workflow; other modes may use MCP/A2A/HTTP entry points; a dedicated Hermes plugin and version-specific interoperability are not yet implemented. ANP is used only as a reference for multi-DID stores, key-purpose isolation, HTTP Message Signatures, recovery state machines, and Gateway/Receiver layering.
+ANP adaptation and dedicated OpenClaw plugins are deferred. Hermes can use the community Skill verification workflow through its native Skill/terminal tools; other hosts require their own integration checks. A dedicated Hermes plugin and native outbound adaptation remain later gates. ANP is used as a reference for stores, key-purpose isolation, recovery state machines, and Gateway/Receiver layering.
 
 ## Boundary
 
@@ -52,7 +52,17 @@ The community Skill is a formal registration/discovery and mutual-verification w
 
 A buildable development framework, G0–G2 local identity/publication entry points, and executable F1–F5 feasibility slice are present. G0–G2 provide encrypted identity import, leased providers, controlled signing, pinned-Root evidence checks, durable publication recovery, and CLI/MCP tools. Actual installed tools depend on trusted host configuration (`RuntimeToolHost.list()`); the default CLI exposes only public discovery and resolution. Private registration credentials remain in host-local material files and are not returned by publication tools. Rejected version conflicts permit an approved same-DID revision; uncertain submissions require reconciliation before any further write.
 
-The F1–F5 slice is limited to the tested MCP profile/transport and lab identities; it is not yet a production identity service or a complete set of protocol adapters. General mutual-authentication and protected-invocation capability flags remain false pending G3/G4. Detailed design, development planning, and framework reviews are maintained separately in `oan-design-docs`. Source code uses English by default.
+G3/G4 add `DurableIdentityVerification`, `SynchronousInvocation` and `NativeSynchronousBoundary`. Configured CLI/MCP/Skill hosts share the same encrypted, caller-scoped four-message workflow. The native boundary verifies actual MCP stdio/Streamable HTTP tool objects, A2A synchronous SendMessage/Task objects, and HTTP application envelopes before executing or returning trusted output. The host pins native descriptors/codecs, peer identity, evidence resolver and operation policy. Metadata carriers preserve unrelated metadata; A2A codecs must use the pinned SDK conversion on both sides. Default tools still offer only public directory access.
+
+Sessions currently expire after 60 seconds. Inspect returns local state and the last public outgoing message for recovery; exact final confirmation may be resent without creating a new session. Durable nonce storage and operation receipts reject duplicate effects, including a new nonce for the same operation ID. A dispatched call with an unknown outcome is never automatically resent; reconcile using its local receipt. Provider/master-key custody remains host-owned and is never configured from peer input.
+
+Streams, task retrieval/cancel/callback protection, Sidecar, Gateway and full Hermes outbound integration remain G5–G7 work. Pinned Root snapshots do not establish live chain/revocation status. Detailed design and development evidence are maintained in `oan-design-docs`. Runtime production code never imports the integration lab. Source code uses English by default.
+
+## Embedding the synchronous boundary
+
+Construct a caller-scoped `DurableIdentityVerification` with an encrypted provider, identity catalog, signing key resolver, audit sink, verified peer resolver and host authorization callback. Pass it to `IdentityRuntime` and `SynchronousInvocation` together with a durable replay store, encrypted operation journal and a pinned `SynchronousProfile`. Install `NativeSynchronousBoundary.handle()` at the actual native business handler; use `call()` on the client before exposing a result. `metadataField` is `_meta` for MCP and `metadata` for A2A/envelope objects. The optional codec must produce the exact canonical native object on both sides. Unsupported operations must be denied at the host, and native TLS/OAuth stays enabled.
+
+`RuntimeToolHost({caller, directory, verification, invocation})` exposes only installed workflow/call handlers. Its invocation adapter maps a local `routeRef` to a preconfigured boundary/transport and forwards the optional stable `requestId`; it must not accept arbitrary destinations or caller claims. CLI startup uses `--host trusted-host.mjs` exporting `createToolHost()`. Community Skill uses its corresponding `--identity-host` adapter. Neither entry exposes arbitrary signing or key export.
 
 ## License
 

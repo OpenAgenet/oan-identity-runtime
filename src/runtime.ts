@@ -41,7 +41,9 @@ export class IdentityRuntime {
       if (identity.status !== 'registered') throw new RuntimeError('identity_not_ready_for_business_signing');
       if (intent.purpose === 'challenge') throw new RuntimeError('unsupported:session_handshake');
       parseDidOan(identity.did); parseDidOan(intent.audienceDid);
-      const session = structuredClone(await this.deps.sessions.requireAuthenticated(intent.sessionId, identity.did, intent.audienceDid));
+      const session = structuredClone(await (this.deps.sessions.requireAuthenticatedForCaller
+        ? this.deps.sessions.requireAuthenticatedForCaller(authenticatedCaller,intent.sessionId,identity.did,intent.audienceDid)
+        : this.deps.sessions.requireAuthenticated(intent.sessionId, identity.did, intent.audienceDid)));
       if (session.binding && (session.binding.serviceRef !== intent.serviceRef || session.binding.protocol !== intent.protocol || session.binding.protocolVersion !== intent.protocolVersion)) throw new RuntimeError('session_scope_mismatch');
       const expiry = Date.parse(session.expiresAt);
       const now = Date.now();
