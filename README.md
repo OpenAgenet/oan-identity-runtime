@@ -50,7 +50,9 @@ The community Skill is a formal registration/discovery and mutual-verification w
 
 ## Development status
 
-A buildable development framework and executable F1–F5 feasibility slice are present. The slice is limited to the tested MCP profile/transport and lab identities; it is not yet a production identity service or a complete set of protocol adapters. Detailed design, development planning, and framework reviews are maintained separately in `oan-design-docs`. Source code uses English by default.
+A buildable development framework, G0–G2 local identity/publication entry points, and executable F1–F5 feasibility slice are present. G0–G2 provide encrypted identity import, leased providers, controlled signing, pinned-Root evidence checks, durable publication recovery, and CLI/MCP tools. Actual installed tools depend on trusted host configuration (`RuntimeToolHost.list()`); the default CLI exposes only public discovery and resolution. Private registration credentials remain in host-local material files and are not returned by publication tools. Rejected version conflicts permit an approved same-DID revision; uncertain submissions require reconciliation before any further write.
+
+The F1–F5 slice is limited to the tested MCP profile/transport and lab identities; it is not yet a production identity service or a complete set of protocol adapters. General mutual-authentication and protected-invocation capability flags remain false pending G3/G4. Detailed design, development planning, and framework reviews are maintained separately in `oan-design-docs`. Source code uses English by default.
 
 ## License
 

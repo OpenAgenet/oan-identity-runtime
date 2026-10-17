@@ -30,8 +30,9 @@ export function createVerifyIpc(token: string, verify: (message: unknown) => Pro
           const result = await verify(structuredClone(request.message));
           socket.end(JSON.stringify({version:1,id,inputDigest,ok:true,result})+'\n');
         } catch (error) {
-          const code = error instanceof Error ? error.message : 'ipc_verification_failed';
-          socket.end(JSON.stringify({version:1,id,inputDigest,ok:false,code:code.replace(/[^a-zA-Z0-9_:-]/g,'').slice(0,128)})+'\n');
+          const known=new Set(['ipc_unauthorized','ipc_schema_invalid','message_binding_mismatch','message_time_invalid','payload_digest_mismatch','message_signature_invalid','policy_denied','replay_detected','evidence_unknown_or_expired','registration_evidence_invalid','invalid_json_payload']);
+          const code = error instanceof Error && known.has(error.message) ? error.message : 'ipc_verification_failed';
+          socket.end(JSON.stringify({version:1,id:typeof id==='string' && id.length<=128?id:undefined,inputDigest,ok:false,code})+'\n');
         }
       })();
     });

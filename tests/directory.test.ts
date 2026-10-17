@@ -29,7 +29,9 @@ test('third-party directory configuration works and network errors are not authe
   await assert.rejects(directory.discover({}), /503/);
   assert.equal(FRAMEWORK_CAPABILITIES.mutualAuthentication, false);
   assert.equal(FRAMEWORK_CAPABILITIES.protectedInvocation, false);
-  assert.equal(FRAMEWORK_CAPABILITIES.registrationWorkflow, false);
+  assert.equal(FRAMEWORK_CAPABILITIES.registrationWorkflow, true);
+  assert.equal(FRAMEWORK_CAPABILITIES.skillFreeToolServer, true);
+  assert.equal(FRAMEWORK_CAPABILITIES.persistentKeyProvider, true);
   assert.ok(RUNTIME_TOOL_NAMES.includes('resource.register'));
   assert.ok(RUNTIME_TOOL_NAMES.includes('invocation.execute'));
 });

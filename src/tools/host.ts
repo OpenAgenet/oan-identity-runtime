@@ -42,6 +42,7 @@ export class RuntimeToolHost {
     const tool=this.list().find(t=>t.name===name);
     if(!tool)throw new RuntimeError('unsupported_tool');
     if(!input || typeof input!=='object' || Array.isArray(input))throw new RuntimeError('invalid_tool_arguments');
+    rejectSecrets(input);
     const args=structuredClone(input) as Record<string,any>;
     for(const field of Object.keys(args))if(!Object.hasOwn(tool.inputSchema.properties,field))throw new RuntimeError('invalid_tool_arguments');
     for(const field of tool.inputSchema.required??[])if(args[field]===undefined)throw new RuntimeError('invalid_tool_arguments');
@@ -69,15 +70,26 @@ export class RuntimeToolHost {
           return this.options.registration!.prepare(caller,{identityRef:args.identityRef,description:args.description});
         }
         if(!args.draftId || args.description || args.identityRef)throw new RuntimeError('invalid_tool_arguments');
-        return this.options.registration!.submit(caller,args.draftId);
+        {
+          const result=await this.options.registration!.submit(caller,args.draftId);
+          // The trusted workflow may retain a private VC. Tools expose its location only.
+          return {resourceDid:result.resourceDid,materialDirectory:result.materialDirectory,
+            status:result.response.status};
+        }
       case 'publication.inspect':return this.options.registration!.inspect(caller,args.draftId);
     }
   }
 }
-function rejectSecrets(value:unknown):void{
-  if(!value || typeof value!=='object')return;
-  for(const [key,entry] of Object.entries(value)){
-    if(/^(privateKey.*|d|identityDir|identityPath|subjectIdentityPath|controllerIdentityPath|agentIdentityPath|callerId|tenantId|trustAnchor|keyRef)$/i.test(key))throw new RuntimeError('host_only_argument');
-    rejectSecrets(entry);
+function rejectSecrets(input:unknown):void{
+  const pending=[{value:input,depth:0}];let nodes=0,size=0;
+  while(pending.length){
+    const {value,depth}=pending.pop()!;
+    if(++nodes>20000 || depth>32)throw new RuntimeError('invalid_tool_arguments');
+    if(typeof value==='string')size+=value.length;
+    else if(value && typeof value==='object')for(const [key,entry] of Object.entries(value)){
+      if(/^(privateKey.*|secretKey|seed|d|identityDir|identityPath|subjectIdentityPath|controllerIdentityPath|agentIdentityPath|callerId|tenantId|trustAnchor|keyRef)$/i.test(key))throw new RuntimeError('host_only_argument');
+      size+=key.length;pending.push({value:entry,depth:depth+1});
+    }
+    if(size>1_000_000)throw new RuntimeError('invalid_tool_arguments');
   }
 }

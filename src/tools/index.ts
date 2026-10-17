@@ -6,17 +6,17 @@
 /** Planned transport-independent tool names; not installed handlers. No arbitrary signing or identity export tools. */
 export const RUNTIME_TOOL_NAMES = ['resource.register', 'resource.discover', 'resource.resolve', 'publication.inspect', 'session.begin', 'session.accept', 'session.advance', 'session.inspect', 'session.close', 'identity.verification.begin', 'identity.verification.accept', 'identity.verification.advance', 'identity.verification.inspect', 'identity.verification.close', 'invocation.execute', 'identity.list', 'identity.select', 'message.signIntent', 'message.verify', 'evidence.inspect'] as const;
 export const FRAMEWORK_CAPABILITIES = {
-  stage: 'framework',
+  stage: 'g0-g2',
   networkServer: false,
   inProcessDirectory: true,
-  skillFreeToolServer: false,
-  registrationWorkflow: false,
+  skillFreeToolServer: true,
+  registrationWorkflow: true,
   protectedInvocation: false,
   hermesNativePlugin: false,
   mutualAuthentication: false,
   identityVerification: { contractVersion: 1, profile: 'oan-session-v1', workflow: false, transports: ['skill', 'cli', 'mcp'], requiresSidecar: false, businessProtection: false },
   registrationTrustChain: false,
-  persistentKeyProvider: false,
+  persistentKeyProvider: true,
   plannedProfiles: ['http', 'mcp', 'a2a'],
   implementedProfiles: [],
 } as const;

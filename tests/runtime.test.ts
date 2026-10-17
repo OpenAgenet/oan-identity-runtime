@@ -72,3 +72,27 @@ test('rejects lossy non-JSON signing payloads', async () => {
   }
   assert.equal(await digestJson({ b: 2, a: 1 }), await digestJson({ a: 1, b: 2 }));
 });
+
+test('LOC-01/EVD-03: caller cannot select another identity; controller signer cannot impersonate resource; approval mutation is isolated',async()=>{
+  const controller=await createOanIdentityRecord({label:'controller',kind:'subject',resourceType:'controller'});
+  const resource=await createOanIdentityRecord({label:'resource',kind:'agent',resourceType:'skill',ownerSubjectDid:controller.did});
+  const peer='did:oan:K7mQ9:'+'2'.repeat(32),catalog=new IdentityCatalog(),keys=new MemoryKeyProvider();
+  await catalog.add({id:'resource',did:resource.did,kind:'resource',status:'registered',verificationMethodId:resource.verificationMethodId,keyRef:'key',didDocument:resource.didDocument,evidenceRefs:[]});
+  await keys.importJwk('controller-key',controller.verificationMethodId,controller.privateKeyJwk);
+  await keys.importJwk('resource-key',resource.verificationMethodId,resource.privateKeyJwk);
+  let wrongKey=true;
+  const registry=new KeyProviderRegistry([keys]);
+  const audit=new MemoryAuditSink();
+  const intent:SignIntent={identityRef:'resource',audienceDid:peer,purpose:'request',protocol:'http',protocolVersion:'test-http-v1',operation:'echo',serviceRef:peer+'#service',sessionId:'session',requestId:'req',payload:{text:'approved'}};
+  const allowed=new PolicyEngine([{callerId:'owner',identityRef:'resource',audienceDid:peer,purpose:'request',protocol:'http',operation:'echo'}]);
+  const runtime=new IdentityRuntime({catalog,keys:{resolve:()=>registry.signerFor({id:'key',providerId:'memory',providerKeyId:wrongKey?'controller-key':'resource-key',purposes:['request']},'request')},audit,
+    sessions:{async requireAuthenticated(){return {id:'session',localDid:resource.did,peerDid:peer,state:'authenticated',expiresAt:new Date(Date.now()+60000).toISOString()};}},
+    policy:{canAccessIdentity:(c,r)=>allowed.canAccessIdentity(c,r),async authorize(c,i){await allowed.authorize(c,i);(intent.payload as any).text='changed-after-approval';}}});
+  await assert.rejects(runtime.signIntent({callerId:'attacker'},intent),/policy_denied/);
+  await assert.rejects(runtime.signIntent({callerId:'owner'},{...intent,identityRef:'controller'}),/policy_denied/);
+  await assert.rejects(runtime.signIntent({callerId:'owner'},intent),/identity_key_binding_mismatch/);
+  wrongKey=false;(intent.payload as any).text='approved';
+  const signed=await runtime.signIntent({callerId:'owner'},intent);
+  assert.equal(signed.context.senderDid,resource.did);assert.deepEqual(signed.payload,{text:'approved'});
+  assert.equal(JSON.stringify(audit.list()).includes('approved'),false);
+});
