@@ -25,7 +25,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "test:lab": "npm run build && node --test test-cases/lab/*.test.mjs"
   },
   "dependencies": {
     "@openagenet/oan-sdk-ts": "file:../oan-sdk-ts",

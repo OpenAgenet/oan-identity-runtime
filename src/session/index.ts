@@ -4,6 +4,7 @@
 // Email: jlxufly@gmail.com
 
 import { RuntimeError } from '../errors.js';
+import { DatabaseSync } from 'node:sqlite';
 /** Process-local bounded replay cache. Restart persistence is a later milestone. */
 /** Must consume atomically. Durable/multi-process adapters implement this port. */
 export interface ReplayStore { consume(scope: string, nonce: string, expiresAt: number, now?: number): Promise<void> }
@@ -19,7 +20,23 @@ export class ReplayCache implements ReplayStore {
     this.entries.set(key, expiresAt);
   }
 }
-export interface SessionRecord { id: string; localDid: string; peerDid: string; expiresAt: string; state: 'challenged' | 'authenticated' | 'closed' }
+
+/** Durable atomic replay protection for a single host or a small multi-process deployment. */
+export class SqliteReplayStore implements ReplayStore {
+  private readonly db: DatabaseSync;
+  constructor(path: string) {
+    this.db = new DatabaseSync(path);
+    this.db.exec('PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS oan_replay (scope TEXT NOT NULL, nonce TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY(scope, nonce))');
+  }
+  async consume(scope: string, nonce: string, expiresAt: number, now = Date.now()): Promise<void> {
+    if (!nonce || !Number.isFinite(expiresAt) || expiresAt <= now) throw new RuntimeError('nonce_expired_or_invalid');
+    this.db.prepare('DELETE FROM oan_replay WHERE expires_at <= ?').run(now);
+    try { this.db.prepare('INSERT INTO oan_replay(scope,nonce,expires_at) VALUES (?,?,?)').run(scope, nonce, expiresAt); }
+    catch { throw new RuntimeError('replay_detected'); }
+  }
+  close(): void { this.db.close(); }
+}
+export interface SessionRecord { id: string; localDid: string; peerDid: string; expiresAt: string; state: 'challenged' | 'authenticated' | 'closed'; binding?: { serviceRef: string; protocol: string; protocolVersion: string } }
 /** The evidence verifier, not an adapter, must approve authentication transitions. */
 export interface SessionManager { requireAuthenticated(id: string, localDid: string, peerDid: string): Promise<SessionRecord> }
 

@@ -28,7 +28,7 @@ ANP adaptation and dedicated OpenClaw plugins are deferred. Skill-enabled OpenCl
 
 The Runtime manages edge identities and cryptographic operations. It does not replace official Root, Registrar, or Discovery services, and it does not use a controller identity as the business-message signing identity of a resource. Protocol profiles accept structured intents or exact signing inputs and do not expose arbitrary byte-signing APIs.
 
-The community Skill is a formal registration/discovery and mutual-verification workflow entry. Its planned local adapter calls the same Runtime core as CLI/MCP tools, without reading long-term private keys. Independent identity verification uses purpose/scope-bound public messages and requires no business endpoint or Sidecar. A completed handshake alone does not protect subsequent business calls. The independent workflow SPI and capability declaration are present, but no handshake engine or authenticated adapter is implemented. Sidecars and Gateways depend on the Runtime through controlled interfaces and do not duplicate identity storage or signing logic.
+The community Skill is a formal registration/discovery and mutual-verification workflow entry. Its local adapter can call the same Runtime core as CLI/MCP tools, without reading long-term private keys. Independent identity verification uses purpose/scope-bound public messages and requires no business endpoint or Sidecar. A completed handshake alone does not protect subsequent business calls. The Runtime now contains the feasibility-slice handshake, protected invocation, encrypted provider, durable replay, and authenticated IPC implementations; protocol-specific production adapters remain separately gated. Sidecars and Gateways depend on the Runtime through controlled interfaces and do not duplicate identity storage or signing logic.
 
 ## Planned Layers
 
@@ -50,8 +50,12 @@ The community Skill is a formal registration/discovery and mutual-verification w
 
 ## Development status
 
-A buildable development framework is now present. This is not yet a production identity service or a complete mutual-authentication implementation. Detailed design, development planning, and framework reviews are maintained separately in `oan-design-docs`. Source code uses English by default.
+A buildable development framework and executable F1–F5 feasibility slice are present. The slice is limited to the tested MCP profile/transport and lab identities; it is not yet a production identity service or a complete set of protocol adapters. Detailed design, development planning, and framework reviews are maintained separately in `oan-design-docs`. Source code uses English by default.
 
 ## License
 
 This repository is licensed under `Apache-2.0` to support OAN ecosystem adoption.
+
+## Integration test cases
+
+See [test-cases/README.md](test-cases/README.md) for the lab-based scenario matrix, executable cases, run commands and explicit blocked end-to-end gates. Test identities are reused from `oan-agent-integration-lab`; no identity keys are copied into this repository.
