@@ -22,13 +22,13 @@ The first Runtime release is a local process or embeddable library responsible f
 - managing challenges, sessions, nonces, replay protection, audit records, and publication recovery;
 - providing MCP, A2A, and ordinary HTTP profiles first.
 
-ANP and OpenClaw are not current dedicated adaptation targets. Hermes-class runtimes may use configured MCP/A2A/HTTP entry points; a dedicated Hermes plugin and version-specific interoperability are not yet implemented. ANP is used only as a reference for multi-DID stores, key-purpose isolation, HTTP Message Signatures, recovery state machines, and Gateway/Receiver layering.
+ANP adaptation and dedicated OpenClaw plugins are deferred. Skill-enabled OpenClaw/Hermes agents are planned users of the community Skill verification workflow; other modes may use MCP/A2A/HTTP entry points; a dedicated Hermes plugin and version-specific interoperability are not yet implemented. ANP is used only as a reference for multi-DID stores, key-purpose isolation, HTTP Message Signatures, recovery state machines, and Gateway/Receiver layering.
 
 ## Boundary
 
 The Runtime manages edge identities and cryptographic operations. It does not replace official Root, Registrar, or Discovery services, and it does not use a controller identity as the business-message signing identity of a resource. Protocol profiles accept structured intents or exact signing inputs and do not expose arbitrary byte-signing APIs.
 
-Community Skills, CLI tools, and MCP entry points may call the Runtime but cannot read long-term private keys from its store. Sidecars and Gateways depend on the Runtime through controlled interfaces and do not duplicate identity storage or signing logic.
+The community Skill is a formal registration/discovery and mutual-verification workflow entry. Its planned local adapter calls the same Runtime core as CLI/MCP tools, without reading long-term private keys. Independent identity verification uses purpose/scope-bound public messages and requires no business endpoint or Sidecar. A completed handshake alone does not protect subsequent business calls. The independent workflow SPI and capability declaration are present, but no handshake engine or authenticated adapter is implemented. Sidecars and Gateways depend on the Runtime through controlled interfaces and do not duplicate identity storage or signing logic.
 
 ## Planned Layers
 

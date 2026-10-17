@@ -31,3 +31,48 @@ export interface SessionHandshake {
   advance(caller: import('../policy/index.js').CallerContext, handshakeId: string, peerMessage: unknown): Promise<{ state: 'pending' | 'authenticated'; reply?: unknown; session?: SessionRecord }>;
   close(caller: import('../policy/index.js').CallerContext, sessionId: string): Promise<void>;
 }
+
+/** Independent identity verification may travel through agent messages or files.
+ * It does not require a network business service or an authenticated business session.
+ * Host authenticates caller/tenant; peer JSON never supplies trusted state.
+ */
+export interface IdentityVerificationScope {
+  identityRef: string;
+  peerDid: string;
+  purpose: string;
+  scope: string;
+  profile: 'oan-session-v1';
+}
+export type IdentityEvidenceState = 'valid' | 'invalid' | 'unknown' | 'not_applicable';
+export interface IdentityVerificationStatus {
+  sessionRef: string;
+  localDid: string;
+  peerDid: string;
+  purpose: string;
+  scope: string;
+  expiresAt: string;
+  state: 'pending' | 'completed' | 'rejected' | 'expired' | 'closed';
+  evidence: Array<{ name: string; status: IdentityEvidenceState; source?: string; observedAt?: string }>;
+  peerPossession: 'not_checked' | 'valid' | 'invalid';
+  peerConfirmation: 'pending' | 'verified';
+  /** A completed handshake does not protect subsequent business traffic. */
+  businessProtection: 'not_established';
+}
+/** Bounded, schema-validated public messages only. No identity bundles or local refs. */
+export interface PublicIdentityHandshakeMessage {
+  profile: 'oan-session-v1';
+  kind: 'client-hello' | 'server-proof' | 'client-proof' | 'session-confirmed';
+  /** Concrete wire schema/signature/transcript validation remains an implementation gate. */
+  body: unknown;
+}
+/** Common core for Skill, CLI and MCP. No real handshake implementation is provided yet.
+ * Caller is authenticated by the local Host; transport only exchanges public messages.
+ * finish requires signed SessionConfirmed, never a natural-language acknowledgement.
+ */
+export interface IdentityVerificationWorkflow {
+  begin(caller: import('../policy/index.js').CallerContext, input: IdentityVerificationScope): Promise<{ sessionRef: string; outgoing: PublicIdentityHandshakeMessage }>;
+  accept(caller: import('../policy/index.js').CallerContext, input: IdentityVerificationScope, message: PublicIdentityHandshakeMessage): Promise<{ sessionRef: string; outgoing: PublicIdentityHandshakeMessage }>;
+  advance(caller: import('../policy/index.js').CallerContext, sessionRef: string, message: PublicIdentityHandshakeMessage): Promise<{ status: IdentityVerificationStatus; outgoing?: PublicIdentityHandshakeMessage }>;
+  inspect(caller: import('../policy/index.js').CallerContext, sessionRef: string): Promise<IdentityVerificationStatus>;
+  close(caller: import('../policy/index.js').CallerContext, sessionRef: string): Promise<void>;
+}
