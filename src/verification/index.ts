@@ -38,7 +38,7 @@ export async function verifyPinnedMessage(message: SignedMessage, options: {
   senderDid: string; audienceDid: string; verificationMethod: string; publicKeyJwk: JsonWebKey;
   serviceRef: string; protocolVersion: string; operation: string; requestDigest?: string;
   sessionId: string; requestId: string; purpose: SignedMessage['context']['purpose'];
-  protocol: SignedMessage['context']['protocol']; replay: ReplayStore; now?: number;
+  protocol: SignedMessage['context']['protocol']; replay: ReplayStore; now?: number; consumeReplay?: boolean;
 }): Promise<{ signatureValid: true; registrationTrust: 'not_checked' }> {
   const {replay,...binding}=options;
   options={...structuredClone(binding),replay};
@@ -57,6 +57,6 @@ export async function verifyPinnedMessage(message: SignedMessage, options: {
     const verified = await compactVerify(signature.value, key, { algorithms: ['EdDSA'] });
     if (verified.protectedHeader.kid !== options.verificationMethod || verified.protectedHeader.typ !== 'oan-message-v1+jws' || !Buffer.from(bytes).equals(Buffer.from(verified.payload))) throw new Error();
   } catch { throw new RuntimeError('message_signature_invalid'); }
-  await options.replay.consume(JSON.stringify([context.senderDid, context.audienceDid, context.purpose, context.sessionId]), context.nonce, expires, now);
+  if (options.consumeReplay !== false) await options.replay.consume(JSON.stringify([context.senderDid, context.audienceDid, context.purpose, context.sessionId]), context.nonce, expires, now);
   return { signatureValid: true, registrationTrust: 'not_checked' };
 }

@@ -10,6 +10,7 @@ export * from './key-provider/index.js';
 export * from './key-provider/memory.js';
 export * from './key-provider/encrypted.js';
 export * from './store/index.js';
+export * from './store/sqlite.js';
 export * from './store/encryption.js';
 export * from './policy/index.js';
 export * from './session/index.js';
@@ -29,6 +30,8 @@ export * from './invocation/protected.js';
 export * from './invocation/synchronous.js';
 export * from './invocation/native.js';
 export * from './invocation/a2a.js';
+export * from './invocation/stream.js';
+export * from './invocation/streaming.js';
 
 export * from './key-provider/registry.js';
 

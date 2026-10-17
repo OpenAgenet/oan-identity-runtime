@@ -33,3 +33,5 @@ export interface StreamVerifier {
     stream: NonNullable<SignIntent['stream']>;
   }): Promise<void>;
 }
+
+export { DurableStreamVerifier, STREAM_GENESIS_DIGEST, type StreamEventInput, type StreamEventStatus } from './stream.js';

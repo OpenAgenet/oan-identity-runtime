@@ -14,7 +14,7 @@ export interface SignIntent {
   operation: string;
   serviceRef: string;
   requestDigest?: string;
-  stream?: { taskId: string; sequence: number; previousDigest: string; state: 'partial' | 'complete' | 'cancelled' };
+  stream?: { taskId: string; sequence: number; previousDigest: string; state: 'partial' | 'complete' | 'cancelled'; artifactDigest?: string; callbackDid?: string; nonce?: string };
   sessionId: string;
   requestId: string;
   payload: unknown;
