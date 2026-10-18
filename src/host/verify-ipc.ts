@@ -2,8 +2,19 @@
 // Initial author: JINLIANG XU
 // Email: jlxufly@gmail.com
 import { createServer } from 'node:net';
+import { chmodSync, lstatSync } from 'node:fs';
 import { timingSafeEqual, createHash } from 'node:crypto';
-import { canonicalJson } from '@openagenet/oan-sdk-ts';
+function canonicalJson(value: unknown): string {
+  if (value === null) return 'null';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number' || typeof value === 'boolean') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
+  }
+  throw new Error('non_json_value');
+}
 /** Single-request authenticated local IPC. Host callback pins trust, peer and policy.
  * Endpoint/token must be distributed through trusted process configuration; no remote TCP.
  */
@@ -37,4 +48,78 @@ export function createVerifyIpc(token: string, verify: (message: unknown) => Pro
       })();
     });
   });
+}
+
+/** Versioned Runtime verifier endpoint consumed by the Rust Sidecar.
+ * The socket must be protected by filesystem ownership/permissions; the bearer
+ * is checked in addition to the OS boundary. Callback binding is passed to the
+ * host verifier and is never accepted as a caller-provided principal.
+ */
+export function createAuthenticatedRuntimeIpc(options: {
+  token: string;
+  callerId: string;
+  tenantId?: string;
+  verify: (input: { envelope: unknown; audience: string; requestId: string; payloadDigest: string; callbackDid?: string }) => Promise<unknown>;
+  sign?: (intent: unknown) => Promise<unknown>;
+  socketMode?: number;
+}) {
+  if (Buffer.byteLength(options.token) < 32 || !options.callerId) throw new Error('ipc_token_or_caller_invalid');
+  const server = createServer(socket => {
+    let bytes = Buffer.alloc(0), handled = false;
+    socket.setTimeout(5000, () => socket.destroy());
+    socket.on('error', () => {});
+    socket.on('data', data => {
+      if (handled) return;
+      bytes = Buffer.concat([bytes, Buffer.isBuffer(data) ? data : Buffer.from(data)]);
+      if (bytes.length > 256 * 1024) { handled = true; socket.end(JSON.stringify({version:'oan-runtime-ipc-v1', code:'ipc_frame_too_large'})+'\n'); return; }
+      if (!bytes.includes(10)) return;
+      handled = true;
+      void (async () => {
+        let request: any;
+        try {
+          request = JSON.parse(bytes.toString('utf8').trim());
+          const supplied = Buffer.from(typeof request.bearer === 'string' ? request.bearer : '');
+          const expected = Buffer.from(options.token);
+          if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected) || request.version !== 'oan-runtime-ipc-v1' || !['verify_request', 'verify_callback', 'sign_request'].includes(request.operation)) throw new Error('ipc_schema_invalid');
+          if (request.operation === 'sign_request') {
+            if (!options.sign || request.intent === undefined || request.expectedCallerId !== options.callerId || request.expectedTenantId !== (options.tenantId ?? null)) throw new Error('ipc_schema_invalid');
+            const inputDigest = signInputDigest(request.intent, options.callerId, options.tenantId);
+            const signed = await options.sign(structuredClone(request.intent));
+            socket.end(JSON.stringify({ version:'oan-runtime-ipc-v1', callerId:options.callerId, tenantId:options.tenantId ?? null, signed, inputDigest })+'\n'); return;
+          }
+          if (request.envelope === undefined || typeof request.expectedAudience !== 'string' || typeof request.expectedRequestId !== 'string' || typeof request.expectedPayloadDigest !== 'string' || (request.callbackDid !== undefined && (typeof request.callbackDid !== 'string' || request.operation !== 'verify_callback'))) throw new Error('ipc_schema_invalid');
+          const inputDigest = inputBindingDigest(request.envelope, request.expectedAudience, request.expectedRequestId, request.expectedPayloadDigest, request.callbackDid);
+          const context = await options.verify({ envelope: structuredClone(request.envelope), audience: request.expectedAudience, requestId: request.expectedRequestId, payloadDigest: request.expectedPayloadDigest, callbackDid: request.callbackDid });
+          if (!context || typeof context !== 'object') throw new Error('runtime_verification_failed');
+          const suppliedContext = context as Record<string, unknown>;
+          if (suppliedContext.audienceDid !== request.expectedAudience || suppliedContext.requestId !== request.expectedRequestId || suppliedContext.payloadDigest !== request.expectedPayloadDigest || (request.callbackDid !== undefined && suppliedContext.callbackDid !== request.callbackDid)) throw new Error('ipc_result_binding_mismatch');
+          socket.end(JSON.stringify({ version:'oan-runtime-ipc-v1', callerId:options.callerId, tenantId:options.tenantId ?? null, context: { ...(context as object), callerId: options.callerId, tenantId: options.tenantId ?? null, ...(request.callbackDid ? { callbackDid: request.callbackDid } : {}) }, inputDigest })+'\n');
+        } catch (error) {
+          socket.end(JSON.stringify({version:'oan-runtime-ipc-v1',callerId:options.callerId,tenantId:options.tenantId ?? null,code:error instanceof Error ? error.message : 'runtime_verification_failed'})+'\n');
+        }
+      })();
+    });
+  });
+  // A Unix socket is an OS authorization boundary, not only an application
+  // bearer channel. Force owner-only access after bind; named pipes use their
+  // platform ACL and are intentionally left untouched here.
+  server.on('listening', () => {
+    const address = server.address();
+    if (typeof address === 'string' && !address.startsWith('\\\\.\\pipe\\')) {
+      try {
+        chmodSync(address, options.socketMode ?? 0o600);
+        const mode = lstatSync(address).mode & 0o777;
+        if ((mode & 0o077) !== 0) server.close();
+      } catch { server.close(); }
+    }
+  });
+  return server;
+}
+
+function inputBindingDigest(envelope: unknown, audience: string, requestId: string, payloadDigest: string, callbackDid?: unknown) {
+  const value = { envelope, audience, requestId, payloadDigest, ...(typeof callbackDid === 'string' ? { callbackDid } : {}) };
+  return 'sha256:' + createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
+}
+function signInputDigest(intent: unknown, callerId: string, tenantId?: string) {
+  return 'sha256:' + createHash('sha256').update(canonicalJson({ intent, callerId, tenantId: tenantId ?? null }), 'utf8').digest('hex');
 }
