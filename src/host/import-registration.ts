@@ -23,6 +23,8 @@ export async function importRegistrationFiles(input: {
   ]);
   if (!identity?.did || identity.did !== didDocument?.id || identity.did !== input.resourcePackage.resourceDid)
     throw new RuntimeError('registration_import_did_mismatch');
+  if (!registrationVc || typeof registrationVc !== 'object' || !input.resourcePackage.rootProof)
+    throw new RuntimeError('registration_import_evidence_missing');
   const bundle: IdentityImportBundle = {
     identity, didDocument, registrationVc, resourcePackage: input.resourcePackage,
     sources: [{ kind: 'discovery', uri: input.discoveryUrl }],
