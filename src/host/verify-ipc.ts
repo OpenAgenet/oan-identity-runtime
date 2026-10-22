@@ -1,7 +1,7 @@
 // Copyright (c) 2026 OpenAgenet contributors
 // Initial author: JINLIANG XU
 // Email: jlxufly@gmail.com
-import { createServer } from 'node:net';
+import { createServer, type Server } from 'node:net';
 import { chmodSync, lstatSync } from 'node:fs';
 import { timingSafeEqual, createHash } from 'node:crypto';
 function canonicalJson(value: unknown): string {
@@ -77,7 +77,9 @@ export function createAuthenticatedRuntimeIpc(options: {
       void (async () => {
         let request: any;
         try {
-          request = JSON.parse(bytes.toString('utf8').trim());
+          const newline = bytes.indexOf(10);
+          if (newline < 0 || bytes.subarray(newline + 1).toString('utf8').trim() || bytes.subarray(0, newline).includes(10)) throw new Error('ipc_schema_invalid');
+          request = JSON.parse(bytes.subarray(0, newline).toString('utf8'));
           const supplied = Buffer.from(typeof request.bearer === 'string' ? request.bearer : '');
           const expected = Buffer.from(options.token);
           if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected) || request.version !== 'oan-runtime-ipc-v1' || !['verify_request', 'verify_callback', 'sign_request'].includes(request.operation)) throw new Error('ipc_schema_invalid');
@@ -95,14 +97,16 @@ export function createAuthenticatedRuntimeIpc(options: {
           if (suppliedContext.audienceDid !== request.expectedAudience || suppliedContext.requestId !== request.expectedRequestId || suppliedContext.payloadDigest !== request.expectedPayloadDigest || (request.callbackDid !== undefined && suppliedContext.callbackDid !== request.callbackDid)) throw new Error('ipc_result_binding_mismatch');
           socket.end(JSON.stringify({ version:'oan-runtime-ipc-v1', callerId:options.callerId, tenantId:options.tenantId ?? null, context: { ...(context as object), callerId: options.callerId, tenantId: options.tenantId ?? null, ...(request.callbackDid ? { callbackDid: request.callbackDid } : {}) }, inputDigest })+'\n');
         } catch (error) {
-          socket.end(JSON.stringify({version:'oan-runtime-ipc-v1',callerId:options.callerId,tenantId:options.tenantId ?? null,code:error instanceof Error ? error.message : 'runtime_verification_failed'})+'\n');
+          const known = new Set(['ipc_schema_invalid', 'ipc_result_binding_mismatch', 'runtime_verification_failed', 'policy_denied', 'replay_detected', 'evidence_unknown_or_expired', 'registration_evidence_invalid', 'message_signature_invalid', 'payload_digest_mismatch']);
+          const code = error instanceof Error && known.has(error.message) ? error.message : 'runtime_verification_failed';
+          socket.end(JSON.stringify({version:'oan-runtime-ipc-v1',callerId:options.callerId,tenantId:options.tenantId ?? null,code})+'\n');
         }
       })();
     });
   });
   // A Unix socket is an OS authorization boundary, not only an application
-  // bearer channel. Force owner-only access after bind; named pipes use their
-  // platform ACL and are intentionally left untouched here.
+  // bearer channel. Named pipes use the local listener's restricted sharing;
+  // Gateway/Sidecar also pin the Runtime process ID and present the bearer.
   server.on('listening', () => {
     const address = server.address();
     if (typeof address === 'string' && !address.startsWith('\\\\.\\pipe\\')) {
@@ -114,6 +118,15 @@ export function createAuthenticatedRuntimeIpc(options: {
     }
   });
   return server;
+}
+
+/** Bind a local Runtime endpoint with Windows named-pipe sharing disabled by default. */
+export async function listenAuthenticatedRuntimeIpc(server: Server, endpoint: string): Promise<void> {
+  if (process.platform === 'win32' ? !/^\\\\\.\\pipe\\[A-Za-z0-9_.-]{1,128}$/.test(endpoint) : !endpoint.startsWith('/')) throw new Error('runtime_ipc_endpoint_invalid');
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen({ path: endpoint, readableAll: false, writableAll: false }, () => { server.off('error', reject); resolve(); });
+  });
 }
 
 function inputBindingDigest(envelope: unknown, audience: string, requestId: string, payloadDigest: string, callbackDid?: unknown) {

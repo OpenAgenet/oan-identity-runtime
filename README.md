@@ -60,6 +60,16 @@ Streams, task retrieval/cancel/callback protection, Sidecar, Gateway and full He
 
 ## Embedding the synchronous boundary
 
+For an Actor that has already registered, a trusted local host can call
+`importRegistrationFiles` with its own OAN Identity, DID document and VC paths,
+the freshly resolved ResourcePackage, a pinned evidence verifier and a
+`LocalIdentityVault`. The helper checks DID agreement and issues a short-lived
+import lease; the Vault verifies document/key/registration evidence and commits
+the key and material to encrypted storage atomically. Do not expose this helper
+as an agent tool or accept paths/trust configuration from a peer. The host can
+bind authenticated IPC with `listenAuthenticatedRuntimeIpc`; on Windows this
+accepts only a local named pipe and disables Node's broad read/write sharing.
+
 Construct a caller-scoped `DurableIdentityVerification` with an encrypted provider, identity catalog, signing key resolver, audit sink, verified peer resolver and host authorization callback. Pass it to `IdentityRuntime` and `SynchronousInvocation` together with a durable replay store, encrypted operation journal and a pinned `SynchronousProfile`. Install `NativeSynchronousBoundary.handle()` at the actual native business handler; use `call()` on the client before exposing a result. `metadataField` is `_meta` for MCP and `metadata` for A2A/envelope objects. The optional codec must produce the exact canonical native object on both sides. Unsupported operations must be denied at the host, and native TLS/OAuth stays enabled.
 
 `RuntimeToolHost({caller, directory, verification, invocation})` exposes only installed workflow/call handlers. Its invocation adapter maps a local `routeRef` to a preconfigured boundary/transport and forwards the optional stable `requestId`; it must not accept arbitrary destinations or caller claims. CLI startup uses `--host trusted-host.mjs` exporting `createToolHost()`. Community Skill uses its corresponding `--identity-host` adapter. Neither entry exposes arbitrary signing or key export.

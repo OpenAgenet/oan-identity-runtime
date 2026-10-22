@@ -7,7 +7,7 @@ import {connect} from 'node:net';
 import {randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {createVerifyIpc, createAuthenticatedRuntimeIpc} from '../src/host/verify-ipc.js';
+import {createVerifyIpc, createAuthenticatedRuntimeIpc, listenAuthenticatedRuntimeIpc} from '../src/host/verify-ipc.js';
 
 test('SEC-02: IPC rejects unauthenticated callers before verifier and never reflects secret exception text',async()=>{
   const token=randomUUID()+randomUUID(),endpoint=process.platform==='win32'?'\\\\.\\pipe\\oan-test-'+randomUUID():join(tmpdir(),'oan-'+randomUUID()+'.sock');
@@ -71,4 +71,29 @@ test('G5: authenticated Runtime IPC binds outbound signing intent and rejects ca
   });
   try { assert.equal((await request()).callerId, 'sidecar-a'); assert.equal((await request('forged')).code, 'ipc_schema_invalid'); }
   finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+test('G5: authenticated Runtime IPC rejects multiple request frames and redacts backend exceptions', async () => {
+  const token = randomUUID() + randomUUID(), endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\oan-frame-${randomUUID()}` : join(tmpdir(), `oan-frame-${randomUUID()}.sock`);
+  let effects = 0;
+  const server = createAuthenticatedRuntimeIpc({ token, callerId: 'gateway-a', verify: async () => { effects++; throw new Error('secret-backend-detail'); } });
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(endpoint, resolve); });
+  const frame = JSON.stringify({ version: 'oan-runtime-ipc-v1', operation: 'verify_request', bearer: token, envelope: {}, expectedAudience: 'did:oan:target', expectedRequestId: 'req', expectedPayloadDigest: 'sha256:x' }) + '\n';
+  const request = (bytes: string) => new Promise<any>((resolve, reject) => { const socket = connect(endpoint); let output = ''; socket.on('error', reject); socket.on('connect', () => socket.write(bytes)); socket.on('data', part => output += part.toString('utf8')); socket.on('end', () => resolve(JSON.parse(output))); });
+  try {
+    assert.equal((await request(frame + frame)).code, 'ipc_schema_invalid'); assert.equal(effects, 0);
+    const result = await request(frame); assert.equal(result.code, 'runtime_verification_failed'); assert.equal(effects, 1);
+    assert.equal(JSON.stringify(result).includes('secret-backend-detail'), false);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+test('G5: authenticated Runtime IPC local listener rejects arbitrary endpoints and serves its pipe', async () => {
+  const token = randomUUID() + randomUUID(), endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\oan-listener-${randomUUID()}` : join(tmpdir(), `oan-listener-${randomUUID()}.sock`);
+  const server = createAuthenticatedRuntimeIpc({ token, callerId: 'gateway-a', verify: async input => ({ subjectDid: 'did:oan:caller', audienceDid: input.audience, requestId: input.requestId, payloadDigest: input.payloadDigest }) });
+  await assert.rejects(listenAuthenticatedRuntimeIpc(server, '127.0.0.1:1234'), /runtime_ipc_endpoint_invalid/);
+  await listenAuthenticatedRuntimeIpc(server, endpoint);
+  try {
+    const response = await new Promise<any>((resolve, reject) => { const socket = connect(endpoint); let output = ''; socket.on('error', reject); socket.on('connect', () => socket.write(JSON.stringify({ version: 'oan-runtime-ipc-v1', operation: 'verify_request', bearer: token, envelope: {}, expectedAudience: 'did:oan:target', expectedRequestId: 'req', expectedPayloadDigest: 'sha256:x' }) + '\n')); socket.on('data', part => output += part.toString('utf8')); socket.on('end', () => resolve(JSON.parse(output))); });
+    assert.equal(response.callerId, 'gateway-a'); assert.equal(response.context.subjectDid, 'did:oan:caller');
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

@@ -118,7 +118,7 @@ test('G5 streaming boundary rejects event metadata substituted around a valid si
 
 async function streamingPair() {
   const identities = await Promise.all(['stream-a', 'stream-b'].map(async label => {
-    const identity = await createOanIdentityRecord({ label, kind: 'agent', resourceType: 'agent' });
+    const identity = await createOanIdentityRecord({ label, kind: 'agent', resourceType: 'agent_service' });
     identity.didDocument = await signDidDocumentProof(identity.didDocument, identity);
     return identity;
   }));

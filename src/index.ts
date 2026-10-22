@@ -39,5 +39,6 @@ export * from './directory/index.js';
 export * from './invocation/index.js';
 
 export * from './host/vault.js';
+export * from './host/import-registration.js';
 export * from './tools/host.js';
 export * from './publication/workflow.js';
