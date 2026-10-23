@@ -60,7 +60,7 @@ This queries only the five manifest DIDs through the official website gateway (`
 
 ## Shared laboratory contract
 
-Use a sibling checkout of `oan-agent-integration-lab`, or set `OAN_LAB_ROOT` to its absolute path. Baseline: lab commit `35ad408`, five resource packages `0.1.0.2`; later metadata changes are read from the manifest rather than fixed hashes. Node 22.13+ and Rust 1.98+ are the component baselines. Keep dependency repositories (`oan-sdk-ts`, `oan-protocol-common`) beside these repositories as required by their existing build configuration.
+Use a sibling checkout of `oan-agent-integration-lab`, or set `OAN_LAB_ROOT` to its absolute path. Baseline: lab commit `35ad408`, five resource packages `0.1.0.2`; later metadata changes are read from the manifest rather than fixed hashes. Node 22.13+ and Rust 1.96+ are the component baselines. Keep dependency repositories (`oan-sdk-ts`, `oan-protocol-common`) beside these repositories as required by their existing build configuration.
 
 | Lab actor | Resource kind / wire protocol | Same-host service | Controller |
 |---|---|---|---|
