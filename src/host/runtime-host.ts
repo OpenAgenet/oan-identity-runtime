@@ -34,6 +34,7 @@ export class RuntimeHostVerifier {
     readonly signer: OanSigner,
     readonly resolvePeer: (did: string) => Promise<VerifiedPeer>,
     readonly replay: ReplayStore,
+    readonly scope?: { runId: string; tenantId: string },
   ) {}
 
   async addVerifiedSession(proof: RuntimeHostSessionProof): Promise<RuntimeHostSession> {
@@ -67,6 +68,7 @@ export class RuntimeHostVerifier {
     const session = this.sessions.get(sessionId);
     if (!session || Date.parse(session.expiresAt) <= Date.now() || session.peerDid !== message.context.senderDid || session.binding.protocol !== message.context.protocol || session.binding.protocolVersion !== message.protocolVersion || session.binding.serviceRef !== message.serviceRef || message.context.purpose !== 'request') throw new RuntimeError('session_not_authenticated');
     const payload = message.payload as Record<string, unknown>;
+    if (this.scope && (payload?.runId !== this.scope.runId || payload?.tenantId !== this.scope.tenantId || envelope.tenantId !== this.scope.tenantId)) throw new RuntimeError('message_binding_mismatch');
     if (payload?.rawBodyDigest !== input.payloadDigest) throw new RuntimeError('payload_digest_mismatch');
     const peer = await this.resolvePeer(message.context.senderDid);
     await verifyPinnedMessage(message, {
@@ -102,6 +104,19 @@ export class RuntimeHostVerifier {
 
 export function nativeResponseDigest(value: unknown): string {
   return `sha256:${createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex')}`;
+}
+
+/** The terminal SSE extension authenticates all original bytes in wire order.
+ * Until this check succeeds, streamed events are provisional, never trusted results.
+ */
+export function splitNativeStreamProof(bytes: Uint8Array): { body: Uint8Array; encodedProof: string } {
+  const buffer = Buffer.from(bytes);
+  const marker = Buffer.from('\nevent: oan-response-proof\ndata: ', 'utf8');
+  const position = buffer.lastIndexOf(marker);
+  if (position < 0) throw new RuntimeError('stream_terminal_proof_missing');
+  const terminal = buffer.subarray(position + marker.length).toString('utf8');
+  if (!/^[A-Za-z0-9_-]+\n\n$/.test(terminal) || buffer.indexOf(marker) !== position) throw new RuntimeError('stream_terminal_proof_invalid');
+  return { body: buffer.subarray(0, position), encodedProof: terminal.slice(0, -2) };
 }
 
 /** Verify the exact wire response bytes and all request correlation fields. */

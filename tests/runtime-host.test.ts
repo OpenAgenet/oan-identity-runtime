@@ -5,9 +5,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalJson, createJwkOanSigner, createOanIdentityRecord } from '@openagenet/oan-sdk-ts';
-import { RuntimeHostVerifier } from '../src/host/runtime-host.js';
+import { RuntimeHostVerifier, splitNativeStreamProof } from '../src/host/runtime-host.js';
 import { ReplayCache } from '../src/session/index.js';
 import { MutualHandshake } from '../src/session/handshake.js';
+
+test('native terminal stream proof requires one complete final event and preserves exact bytes', () => {
+  const body = Buffer.from('event: message\ndata: {"id":1}\n\n');
+  const marker = Buffer.from('\nevent: oan-response-proof\ndata: YWJj\n\n');
+  const result = splitNativeStreamProof(Buffer.concat([body, marker]));
+  assert.deepEqual(Buffer.from(result.body), body); assert.equal(result.encodedProof, 'YWJj');
+  for (const invalid of [body, Buffer.concat([body, marker.subarray(0, -1)]), Buffer.concat([body, marker, marker]), Buffer.concat([body, marker, Buffer.from('extra')])]) assert.throws(() => splitNativeStreamProof(invalid), /stream_terminal_proof/);
+});
 
 test('formal Runtime host verifies a signed request against a bound session and replay store', async () => {
   const identity = await createOanIdentityRecord({ label: 'runtime-host', resourceType: 'skill', kind: 'agent' });
@@ -34,6 +42,9 @@ test('formal Runtime host verifies a signed request against a bound session and 
   const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', kid: peer.verificationMethod, typ: 'oan-message-v1+jws' })).toString('base64url');
   const payload = Buffer.from(canonicalJson({ context: message.context, operation: message.operation, serviceRef: message.serviceRef, protocolVersion: message.protocolVersion, payload: message.payload })).toString('base64url');
   message.signature.value = `${header}.${payload}.${Buffer.from(await otherSigner.signPreparedInput(new TextEncoder().encode(`${header}.${payload}`))).toString('base64url')}`;
+  const scoped = new RuntimeHostVerifier(identity.did, signer, resolvePeer, new ReplayCache(), { runId: 'expected-run', tenantId: 'expected-tenant' });
+  await scoped.addVerifiedSession({ scope, transcript: [hello, server, client, confirmation] });
+  await assert.rejects(scoped.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message, tenantId: 'expected-tenant' }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest }), /message_binding_mismatch/);
   const result = await host.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest });
   assert.equal(result.subjectDid, peer.did);
   await assert.rejects(host.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest }), /replay_detected/);
