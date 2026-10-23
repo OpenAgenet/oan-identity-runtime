@@ -41,6 +41,8 @@ export async function openRegisteredActor(config: {
    * remains five minutes; callers must opt in explicitly for registration
    * runs that can exceed that window. */
   unlockLeaseMs?: number;
+  /** Host-only freshness window for a multi-actor registration run. */
+  evidenceMaxAgeMs?: number;
   /** Trusted host configuration only. Omitted rules retain the existing
    * per-request policy; an explicit empty list denies every request. */
   tenantId?: string;
@@ -48,6 +50,8 @@ export async function openRegisteredActor(config: {
   policyRules?: readonly PolicyRule[];
 }) {
   config = { ...config };
+  const evidenceMaxAgeMs = config.evidenceMaxAgeMs ?? 300_000;
+  if (!Number.isInteger(evidenceMaxAgeMs) || evidenceMaxAgeMs < 60_000 || evidenceMaxAgeMs > 3_600_000) throw new Error("runtime_evidence_window_invalid");
   const policyConfig = registeredActorPolicy(config), caller = policyConfig.caller;
   const read = async (path: string) => JSON.parse(await readFile(path, 'utf8'));
   const document = await read(config.didDocumentPath);
@@ -60,7 +64,7 @@ export async function openRegisteredActor(config: {
   keys.unlock(config.masterKey, Date.now() + unlockLeaseMs);
   const vault = new LocalIdentityVault(keys, new MemoryAuditSink(), {
     rootDid: config.pins.anchor.rootDid,
-    verifier: new PinnedRootEvidenceVerifier(config.pins.anchor, new Date().toISOString(), 300_000,
+    verifier: new PinnedRootEvidenceVerifier(config.pins.anchor, new Date().toISOString(), evidenceMaxAgeMs,
       { registrar: config.pins.registrar, requirePrivateVc: true }),
   });
   if (!(await vault.list()).some(item => item.id === config.identityRef)) await importRegistrationFiles({ ...config, vault, caller });
@@ -69,7 +73,7 @@ export async function openRegisteredActor(config: {
   const signer: OanSigner = await keys.getSigner(record.keyRef);
   // Reopening a vault must validate current public evidence and key bindings,
   // rather than inheriting the previous process's import verdict.
-  const verification = await new PinnedRootEvidenceVerifier(config.pins.anchor, new Date().toISOString(), 300_000,
+  const verification = await new PinnedRootEvidenceVerifier(config.pins.anchor, new Date().toISOString(), evidenceMaxAgeMs,
     { registrar: config.pins.registrar, requirePrivateVc: true }).verifyRegistration({ didDocument: document, resourcePackage: config.resourcePackage,
       registrationVc: await read(config.registrationVcPath), expectedResourceDid: record.did, trustAnchor: { mode: 'pinned-root', rootDid: config.pins.anchor.rootDid } });
   if (!verification.valid || canonicalJson(record.didDocument) !== canonicalJson(document)
@@ -79,7 +83,7 @@ export async function openRegisteredActor(config: {
   const resolvePeer = async (did: string) => {
     const resourcePackage = did === record!.did ? config.resourcePackage : await config.resolvePackage(did);
     return { ...await verifyPinnedRootPackage({ resourcePackage, expectedDid: did, anchor: config.pins.anchor,
-      observedAt: new Date().toISOString(), maxAgeMs: 300_000 }), did };
+      observedAt: new Date().toISOString(), maxAgeMs: evidenceMaxAgeMs }), did };
   };
   const replay = new SqliteReplayStore(`${config.vaultPath}.replay`);
   const host = new RuntimeHostVerifier(record.did, signer, resolvePeer, replay, config.runId ? { runId: config.runId, tenantId: caller.tenantId } : undefined);
