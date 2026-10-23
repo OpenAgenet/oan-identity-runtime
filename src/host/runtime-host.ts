@@ -180,8 +180,20 @@ export async function verifyNativeResponseProof(input: {
   const peer = await input.resolvePeer(input.expected.senderDid);
   if (peer.did !== input.expected.senderDid || !Number.isFinite(peer.validUntil) || peer.validUntil <= Date.now()) throw new RuntimeError('response_peer_evidence_invalid');
   const payloadDigest = `sha256:${createHash('sha256').update(input.responseBody).digest('hex')}`;
-  if (!envelope || envelope.kind !== input.expected.kind || envelope.senderDid !== input.expected.senderDid || envelope.audienceDid !== input.expected.audienceDid || envelope.targetResourceDid !== input.expected.targetResourceDid || envelope.requestId !== input.expected.requestId || envelope.requestPayloadDigest !== input.expected.requestPayloadDigest || envelope.payloadDigest !== payloadDigest || envelope.status !== input.status || signature?.verificationMethod !== peer.verificationMethod || typeof signature?.value !== 'string') {
-    throw new RuntimeError('response_proof_binding_invalid');
+  const mismatches = [
+    envelope?.kind !== input.expected.kind && 'kind',
+    envelope?.senderDid !== input.expected.senderDid && 'senderDid',
+    envelope?.audienceDid !== input.expected.audienceDid && 'audienceDid',
+    envelope?.targetResourceDid !== input.expected.targetResourceDid && 'targetResourceDid',
+    envelope?.requestId !== input.expected.requestId && 'requestId',
+    envelope?.requestPayloadDigest !== input.expected.requestPayloadDigest && 'requestPayloadDigest',
+    envelope?.payloadDigest !== payloadDigest && 'payloadDigest',
+    envelope?.status !== input.status && 'status',
+    signature?.verificationMethod !== peer.verificationMethod && 'verificationMethod',
+    typeof signature?.value !== 'string' && 'signature',
+  ].filter(Boolean);
+  if (!envelope || mismatches.length) {
+    throw new RuntimeError(`response_proof_binding_invalid:${mismatches.join(',') || 'envelope'}`);
   }
   try {
     const verified = await compactVerify(signature.value, await importJWK(peer.publicKeyJwk, 'EdDSA'), { algorithms: ['EdDSA'] });
