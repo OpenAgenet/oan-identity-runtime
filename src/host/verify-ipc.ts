@@ -80,6 +80,9 @@ export function createAuthenticatedRuntimeIpc(options: {
           const newline = bytes.indexOf(10);
           if (newline < 0 || bytes.subarray(newline + 1).toString('utf8').trim() || bytes.subarray(0, newline).includes(10)) throw new Error('ipc_schema_invalid');
           request = JSON.parse(bytes.subarray(0, newline).toString('utf8'));
+          // Rust Option serializes an absent callback as null; normalize only
+          // this optional field before applying the same strict validation.
+          if (request.callbackDid === null) delete request.callbackDid;
           const supplied = Buffer.from(typeof request.bearer === 'string' ? request.bearer : '');
           const expected = Buffer.from(options.token);
           if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected) || request.version !== 'oan-runtime-ipc-v1' || !['verify_request', 'verify_callback', 'sign_request'].includes(request.operation)) throw new Error('ipc_schema_invalid');

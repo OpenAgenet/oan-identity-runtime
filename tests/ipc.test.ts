@@ -55,10 +55,10 @@ test('G5: authenticated Runtime IPC binds callback and caller context', async ()
   const token = randomUUID() + randomUUID(), endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\oan-callback-${randomUUID()}` : join(tmpdir(), `oan-callback-${randomUUID()}.sock`);
   const server = createAuthenticatedRuntimeIpc({ token, callerId: 'sidecar-a', tenantId: 'tenant-a', verify: async input => ({ subjectDid: 'did:oan:caller', audienceDid: input.audience, requestId: input.requestId, payloadDigest: input.payloadDigest, callbackDid: input.callbackDid }) });
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(endpoint, resolve); });
-  const request = (callbackDid?: string) => new Promise<any>((resolve, reject) => {
-    const socket = connect(endpoint); let output = ''; socket.on('error', reject); socket.on('connect', () => socket.write(JSON.stringify({ version: 'oan-runtime-ipc-v1', operation: callbackDid ? 'verify_callback' : 'verify_request', bearer: token, envelope: { signed: true }, expectedAudience: 'did:oan:target', expectedRequestId: 'req-1', expectedPayloadDigest: 'sha256:' + '1'.repeat(64), ...(callbackDid ? { callbackDid } : {}) }) + '\n')); socket.on('data', part => output += part.toString('utf8')); socket.on('end', () => resolve(JSON.parse(output)));
+  const request = (callbackDid?: string | null) => new Promise<any>((resolve, reject) => {
+    const socket = connect(endpoint); let output = ''; socket.on('error', reject); socket.on('connect', () => socket.write(JSON.stringify({ version: 'oan-runtime-ipc-v1', operation: callbackDid ? 'verify_callback' : 'verify_request', bearer: token, envelope: { signed: true }, expectedAudience: 'did:oan:target', expectedRequestId: 'req-1', expectedPayloadDigest: 'sha256:' + '1'.repeat(64), ...(callbackDid !== undefined ? { callbackDid } : {}) }) + '\n')); socket.on('data', part => output += part.toString('utf8')); socket.on('end', () => resolve(JSON.parse(output)));
   });
-  try { const result = await request('did:oan:caller'); assert.equal(result.callerId, 'sidecar-a'); assert.equal(result.context.callbackDid, 'did:oan:caller'); assert.equal(result.context.tenantId, 'tenant-a'); }
+  try { const result = await request('did:oan:caller'); assert.equal(result.callerId, 'sidecar-a'); assert.equal(result.context.callbackDid, 'did:oan:caller'); assert.equal(result.context.tenantId, 'tenant-a'); const absent = await request(null); assert.equal(absent.code, undefined); assert.equal(absent.context.callbackDid, undefined); assert.equal(absent.context.audienceDid, 'did:oan:target'); }
   finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
 
