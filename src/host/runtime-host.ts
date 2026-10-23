@@ -123,6 +123,30 @@ export class RuntimeHostVerifier {
     const value = `${protectedHeader}.${payload}.${base64url.encode(await this.signer.signPreparedInput(new TextEncoder().encode(`${protectedHeader}.${payload}`)))}`;
     return { envelope, signature: { verificationMethod: this.signer.keyId, value } };
   }
+
+  /** Local egress enforcement: only this actor's authenticated session and
+   * locally signed request may leave its caller-side Gateway. The receiver
+   * still independently verifies the same request and signs its response. */
+  async verifyOutbound(input: { envelope: unknown; audience: string; requestId: string; payloadDigest: string }): Promise<Record<string, unknown>> {
+    this.prune();
+    const envelope = input.envelope as any, message = envelope?.message as SignedMessage;
+    const session = this.sessions.get(envelope?.sessionId);
+    if (!message || !session || session.localDid !== this.localDid || session.peerDid !== input.audience
+      || message.context.senderDid !== this.localDid || message.context.audienceDid !== input.audience
+      || envelope.targetResourceDid !== input.audience || message.context.purpose !== 'request'
+      || Date.parse(session.expiresAt) <= Date.now() || message.context.protocol !== session.binding.protocol
+      || message.serviceRef !== session.binding.serviceRef || message.protocolVersion !== session.binding.protocolVersion
+      || (message.payload as any)?.rawBodyDigest !== input.payloadDigest) throw new RuntimeError('message_binding_mismatch');
+    const payload = message.payload as any;
+    if (this.scope && (payload.runId !== this.scope.runId || payload.tenantId !== this.scope.tenantId || envelope.tenantId !== this.scope.tenantId
+      || typeof payload.httpBinding?.method !== 'string' || typeof payload.httpBinding?.target !== 'string' || typeof payload.httpBinding?.mcpSessionId !== 'string')) throw new RuntimeError('message_binding_mismatch');
+    const local = await this.resolvePeer(this.localDid);
+    await verifyPinnedMessage(message, { senderDid: this.localDid, audienceDid: input.audience, verificationMethod: local.verificationMethod,
+      publicKeyJwk: local.publicKeyJwk, serviceRef: session.binding.serviceRef, protocolVersion: session.binding.protocolVersion,
+      operation: message.operation, requestDigest: message.requestDigest, sessionId: session.id, requestId: input.requestId,
+      purpose: 'request', protocol: message.context.protocol, replay: this.replay });
+    return { subjectDid: this.localDid, audienceDid: input.audience, requestId: input.requestId, payloadDigest: input.payloadDigest };
+  }
 }
 
 export function nativeResponseDigest(value: unknown): string {
@@ -156,7 +180,9 @@ export async function verifyNativeResponseProof(input: {
   const peer = await input.resolvePeer(input.expected.senderDid);
   if (peer.did !== input.expected.senderDid || !Number.isFinite(peer.validUntil) || peer.validUntil <= Date.now()) throw new RuntimeError('response_peer_evidence_invalid');
   const payloadDigest = `sha256:${createHash('sha256').update(input.responseBody).digest('hex')}`;
-  if (!envelope || envelope.kind !== input.expected.kind || envelope.senderDid !== input.expected.senderDid || envelope.audienceDid !== input.expected.audienceDid || envelope.targetResourceDid !== input.expected.targetResourceDid || envelope.requestId !== input.expected.requestId || envelope.requestPayloadDigest !== input.expected.requestPayloadDigest || envelope.payloadDigest !== payloadDigest || envelope.status !== input.status || signature?.verificationMethod !== peer.verificationMethod || typeof signature?.value !== 'string') throw new RuntimeError('response_proof_binding_invalid');
+  if (!envelope || envelope.kind !== input.expected.kind || envelope.senderDid !== input.expected.senderDid || envelope.audienceDid !== input.expected.audienceDid || envelope.targetResourceDid !== input.expected.targetResourceDid || envelope.requestId !== input.expected.requestId || envelope.requestPayloadDigest !== input.expected.requestPayloadDigest || envelope.payloadDigest !== payloadDigest || envelope.status !== input.status || signature?.verificationMethod !== peer.verificationMethod || typeof signature?.value !== 'string') {
+    throw new RuntimeError('response_proof_binding_invalid');
+  }
   try {
     const verified = await compactVerify(signature.value, await importJWK(peer.publicKeyJwk, 'EdDSA'), { algorithms: ['EdDSA'] });
     if (verified.protectedHeader.kid !== peer.verificationMethod || verified.protectedHeader.typ !== 'oan-native-response+jws' || !Buffer.from(verified.payload).equals(Buffer.from(canonicalJson(envelope), 'utf8'))) throw new Error();

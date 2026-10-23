@@ -50,6 +50,13 @@ test('formal Runtime host verifies a signed request against a bound session and 
   const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', kid: peer.verificationMethod, typ: 'oan-message-v1+jws' })).toString('base64url');
   const payload = Buffer.from(canonicalJson({ context: message.context, operation: message.operation, serviceRef: message.serviceRef, protocolVersion: message.protocolVersion, payload: message.payload })).toString('base64url');
   message.signature.value = `${header}.${payload}.${Buffer.from(await otherSigner.signPreparedInput(new TextEncoder().encode(`${header}.${payload}`))).toString('base64url')}`;
+  const egress = new RuntimeHostVerifier(other.did, otherSigner, resolvePeer, new ReplayCache());
+  await egress.addVerifiedSession(validProof);
+  const outbound = { envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest };
+  await assert.rejects(egress.verifyOutbound({ ...outbound, audience: other.did }), /message_binding_mismatch/);
+  await assert.rejects(egress.verifyOutbound({ ...outbound, payloadDigest: 'sha256:wrong' }), /message_binding_mismatch/);
+  assert.equal((await egress.verifyOutbound(outbound)).subjectDid, other.did);
+  await assert.rejects(egress.verifyOutbound(outbound), /replay_detected/);
   const scoped = new RuntimeHostVerifier(identity.did, signer, resolvePeer, new ReplayCache(), { runId: 'expected-run', tenantId: 'expected-tenant' });
   await scoped.addVerifiedSession({ scope, transcript: [hello, server, client, confirmation] });
   await assert.rejects(scoped.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message, tenantId: 'expected-tenant' }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest }), /message_binding_mismatch/);

@@ -37,6 +37,10 @@ export async function openRegisteredActor(config: {
   resourcePackage: any; discoveryUrl: string; pins: any; vaultPath: string; masterKey: Uint8Array;
   resolvePackage(did: string): Promise<any>;
   runId?: string;
+  /** Host-only lease for a long multi-actor bootstrap. The secure default
+   * remains five minutes; callers must opt in explicitly for registration
+   * runs that can exceed that window. */
+  unlockLeaseMs?: number;
   /** Trusted host configuration only. Omitted rules retain the existing
    * per-request policy; an explicit empty list denies every request. */
   tenantId?: string;
@@ -51,7 +55,9 @@ export async function openRegisteredActor(config: {
   const store = new SqliteBlobStore(config.vaultPath);
   const keys = new EncryptedKeyProvider(store);
   try {
-  keys.unlock(config.masterKey);
+  const unlockLeaseMs = config.unlockLeaseMs ?? 300_000;
+  if (!Number.isInteger(unlockLeaseMs) || unlockLeaseMs < 60_000 || unlockLeaseMs > 3_600_000) throw new Error('runtime_unlock_lease_invalid');
+  keys.unlock(config.masterKey, Date.now() + unlockLeaseMs);
   const vault = new LocalIdentityVault(keys, new MemoryAuditSink(), {
     rootDid: config.pins.anchor.rootDid,
     verifier: new PinnedRootEvidenceVerifier(config.pins.anchor, new Date().toISOString(), 300_000,
