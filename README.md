@@ -81,3 +81,19 @@ This repository is licensed under `Apache-2.0` to support OAN ecosystem adoption
 ## Integration test cases
 
 See [test-cases/README.md](test-cases/README.md) for the lab-based scenario matrix, executable cases, run commands and explicit blocked end-to-end gates. Test identities are reused from `oan-agent-integration-lab`; no identity keys are copied into this repository.
+
+## Protected native HTTP clients
+
+`createVerifiedHttpFetch` is a reusable native SDK fetch hook. A trusted host
+provides signing and verification callbacks through embedded Runtime or local
+IPC. Pin the endpoint and allowed methods; the adapter blocks redirects and
+oversized responses, verifies before returning, and removes the OAN terminal SSE
+proof before the native protocol SDK parses events. Business code keeps native
+A2A/MCP operations and cancellation signals and never handles key material.
+This bounded response adapter buffers until verification; it does not expose
+unverified streamed chunks as trusted data. Gateway/Sidecar may still forward
+incrementally for provisional display.
+
+Runtime owns identity and cryptography; Sidecar owns resource ingress; Gateway
+owns deployment/tenant routing. Registration/discovery remain SDK/Skill workflows.
+The demo reference composes these APIs and does not constitute a Runtime dependency.

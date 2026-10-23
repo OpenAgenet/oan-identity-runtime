@@ -29,6 +29,7 @@ export * from './host/verify-ipc.js';
 export * from './invocation/protected.js';
 export * from './invocation/synchronous.js';
 export * from './invocation/native.js';
+export * from './invocation/verified-http.js';
 export * from './invocation/a2a.js';
 export * from './invocation/stream.js';
 export * from './invocation/streaming.js';

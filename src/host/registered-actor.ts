@@ -61,7 +61,8 @@ export async function openRegisteredActor(config: {
   return {
     did: record.did, host, handshake, resolvePeer,
     async installSession(proof: RuntimeHostSessionProof) { return host.addVerifiedSession(proof); },
-    async signRequest(proof: RuntimeHostSessionProof, requestId: string, rawBodyDigest: string, operation: string) {
+    async signRequest(proof: RuntimeHostSessionProof, requestId: string, rawBodyDigest: string, operation: string,
+      httpBinding?: { method: string; target: string; mcpSessionId: string }) {
       const session = await host.addVerifiedSession(proof);
       const policy = new PolicyEngine([{ ...caller, identityRef: config.identityRef,
         audienceDid: session.peerDid, purpose: 'request', protocol: proof.scope.protocol, operation }]);
@@ -72,7 +73,7 @@ export async function openRegisteredActor(config: {
         } }, audit: new MemoryAuditSink() });
       return runtime.signIntent(caller, { identityRef: config.identityRef, audienceDid: session.peerDid,
         purpose: 'request', protocol: proof.scope.protocol, protocolVersion: proof.scope.protocolVersion,
-        serviceRef: proof.scope.serviceRef, sessionId: session.id, requestId, operation, payload: { rawBodyDigest, ...(config.runId ? { runId: config.runId, tenantId: caller.tenantId } : {}) } });
+        serviceRef: proof.scope.serviceRef, sessionId: session.id, requestId, operation, payload: { rawBodyDigest, ...(httpBinding ? { httpBinding } : {}), ...(config.runId ? { runId: config.runId, tenantId: caller.tenantId } : {}) } });
     },
     close() { keys.lock(); replay.close(); store.close(); },
   };

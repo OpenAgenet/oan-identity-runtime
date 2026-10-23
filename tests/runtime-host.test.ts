@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalJson, createJwkOanSigner, createOanIdentityRecord } from '@openagenet/oan-sdk-ts';
-import { RuntimeHostVerifier, splitNativeStreamProof } from '../src/host/runtime-host.js';
+import { RuntimeHostVerifier, splitNativeStreamProof, verifyNativeResponseProof } from '../src/host/runtime-host.js';
 import { ReplayCache } from '../src/session/index.js';
 import { MutualHandshake } from '../src/session/handshake.js';
 
@@ -35,6 +35,14 @@ test('formal Runtime host verifies a signed request against a bound session and 
   const confirmation = (await responder.advance(hello.body.sessionId, client)).reply!;
   await initiator.advance(hello.body.sessionId, confirmation);
   await host.addVerifiedSession({ scope, transcript: [hello, server, client, confirmation] });
+  const validProof = { scope, transcript: [hello, server, client, confirmation] } as any;
+  for (const dates of [{ createdAt: 'invalid', expiresAt: 'invalid' }, { createdAt: new Date(Date.now()+120000).toISOString(), expiresAt: new Date(Date.now()+150000).toISOString() }]) {
+    const malformed = structuredClone(validProof);
+    Object.assign(malformed.transcript[0].body, dates);
+    await assert.rejects(host.addVerifiedSession(malformed), /session_transcript_unverified/);
+  }
+  const invalidEvidence = new RuntimeHostVerifier(identity.did, signer, async did => ({ ...await resolvePeer(did), validUntil: NaN }), new ReplayCache());
+  await assert.rejects(invalidEvidence.addVerifiedSession(validProof), /session_transcript_unverified/);
   const rawBodyDigest = `sha256:${'a'.repeat(64)}`;
   const message = { context: { profile: 'oan-message-v1', senderDid: peer.did, audienceDid: identity.did, purpose: 'request', protocol: 'mcp', sessionId: hello.body.sessionId, messageId: 'm-1', requestId: 'request-1', nonce: 'nonce-1', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30000).toISOString(), payloadDigest: 'sha256:placeholder' }, operation: 'tools/call', serviceRef: scope.serviceRef, protocolVersion: '2025-11-25', payload: { rawBodyDigest }, signature: { verificationMethod: peer.verificationMethod, value: '' } } as any;
   const { digestJson } = await import('../src/verification/index.js');
@@ -45,8 +53,25 @@ test('formal Runtime host verifies a signed request against a bound session and 
   const scoped = new RuntimeHostVerifier(identity.did, signer, resolvePeer, new ReplayCache(), { runId: 'expected-run', tenantId: 'expected-tenant' });
   await scoped.addVerifiedSession({ scope, transcript: [hello, server, client, confirmation] });
   await assert.rejects(scoped.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message, tenantId: 'expected-tenant' }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest }), /message_binding_mismatch/);
+  const oldExpiry = peers.get(other.did)!.validUntil;
+  peers.get(other.did)!.validUntil = Date.now() - 1;
+  await assert.rejects(host.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest }), /session_evidence_expired/);
+  peers.get(other.did)!.validUntil = oldExpiry;
   const result = await host.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest });
   assert.equal(result.subjectDid, peer.did);
+  const concurrent = structuredClone(message);
+  concurrent.context.nonce = 'fresh-nonce-same-request';
+  const concurrentPayload = Buffer.from(canonicalJson({ context: concurrent.context, operation: concurrent.operation, serviceRef: concurrent.serviceRef, protocolVersion: concurrent.protocolVersion, payload: concurrent.payload })).toString('base64url');
+  concurrent.signature.value = `${header}.${concurrentPayload}.${Buffer.from(await otherSigner.signPreparedInput(new TextEncoder().encode(`${header}.${concurrentPayload}`))).toString('base64url')}`;
+  await assert.rejects(host.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message: concurrent }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest }), /request_already_in_flight/);
+  const responseBody = Buffer.from('real response');
+  const { createHash } = await import('node:crypto');
+  const encodedProof = Buffer.from(JSON.stringify(await host.sign({ kind: 'sidecar-response', requestId: 'request-1', requestPayloadDigest: rawBodyDigest,
+    payloadDigest: `sha256:${createHash('sha256').update(responseBody).digest('hex')}`, targetResourceDid: identity.did, audienceDid: other.did, status: 200 }))).toString('base64url');
+  const responseInput = { encodedProof, responseBody, status: 200, expected: { kind: 'sidecar-response' as const, requestId: 'request-1', requestPayloadDigest: rawBodyDigest, targetResourceDid: identity.did, audienceDid: other.did, senderDid: identity.did }, resolvePeer };
+  await verifyNativeResponseProof(responseInput);
+  for (const validUntil of [NaN, Date.now() - 1]) await assert.rejects(verifyNativeResponseProof({ ...responseInput, resolvePeer: async did => ({ ...await resolvePeer(did), validUntil }) }), /response_peer_evidence_invalid/);
+  await assert.rejects(verifyNativeResponseProof({ ...responseInput, resolvePeer: async did => ({ ...await resolvePeer(did), did: other.did }) }), /response_peer_evidence_invalid/);
   await assert.rejects(host.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest }), /replay_detected/);
   await assert.rejects(host.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message }, audience: identity.did, requestId: 'request-1', payloadDigest: `sha256:${'b'.repeat(64)}` }), /payload_digest_mismatch/);
 });

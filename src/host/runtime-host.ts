@@ -37,17 +37,26 @@ export class RuntimeHostVerifier {
     readonly scope?: { runId: string; tenantId: string },
   ) {}
 
+  private prune(): void {
+    const now = Date.now();
+    for (const [id, session] of this.sessions) if (Date.parse(session.expiresAt) <= now) this.sessions.delete(id);
+    for (const [id, request] of this.verifiedRequests) if (request.expiresAt <= now) this.verifiedRequests.delete(id);
+  }
+
   async addVerifiedSession(proof: RuntimeHostSessionProof): Promise<RuntimeHostSession> {
+    this.prune();
     const { scope, transcript } = structuredClone(proof);
     if (!Array.isArray(transcript) || transcript.length !== 4 || ![scope.initiatorDid, scope.responderDid].includes(this.localDid) || scope.initiatorDid === scope.responderDid) throw new RuntimeError('session_transcript_unverified');
     const kinds = ['client-hello', 'server-proof', 'client-proof', 'session-confirmed'];
     const first = transcript[0]?.body;
-    if (!first?.sessionId || !first.nonceA || first.nonceB !== '' || first.previousDigest !== '' || Date.parse(first.expiresAt) <= Date.now() || Date.parse(first.expiresAt) - Date.parse(first.createdAt) > 60000) throw new RuntimeError('session_transcript_unverified');
+    const created = Date.parse(first?.createdAt), expires = Date.parse(first?.expiresAt), now = Date.now();
+    if (!first?.sessionId || !first.nonceA || first.nonceB !== '' || first.previousDigest !== '' || !Number.isFinite(created) || !Number.isFinite(expires)
+      || created > now + 30000 || expires <= now || expires <= created || expires - created > 60000) throw new RuntimeError('session_transcript_unverified');
     for (let index = 0; index < 4; index++) {
       const item = transcript[index], body = item?.body;
       const signerDid = index % 2 === 0 ? scope.initiatorDid : scope.responderDid;
       const peer = await this.resolvePeer(signerDid);
-      if (peer.did !== signerDid || peer.validUntil <= Date.parse(first.expiresAt) || (signerDid === this.localDid && (this.signer.keyId !== peer.verificationMethod || (await this.signer.publicKey()).x !== peer.publicKeyJwk.x))) throw new RuntimeError('session_transcript_unverified');
+      if (peer.did !== signerDid || !Number.isFinite(peer.validUntil) || peer.validUntil <= expires || (signerDid === this.localDid && (this.signer.keyId !== peer.verificationMethod || (await this.signer.publicKey()).x !== peer.publicKeyJwk.x))) throw new RuntimeError('session_transcript_unverified');
       if (!body || body.kind !== kinds[index] || body.profile !== 'oan-session-v1' || body.sessionId !== first.sessionId || body.nonceA !== first.nonceA || body.createdAt !== first.createdAt || body.expiresAt !== first.expiresAt || Object.keys(scope).some(key => body[key as keyof HandshakeScope] !== scope[key as keyof HandshakeScope]) || (index === 1 && !body.nonceB) || (index > 0 && (body.nonceB !== transcript[1].body.nonceB || body.previousDigest !== await digestJson(transcript[index - 1])))) throw new RuntimeError('session_transcript_unverified');
       try {
         const verified = await compactVerify(item.jws, await importJWK(peer.publicKeyJwk, 'EdDSA'), { algorithms: ['EdDSA'] });
@@ -56,11 +65,14 @@ export class RuntimeHostVerifier {
     }
     const other = this.localDid === scope.initiatorDid ? scope.responderDid : scope.initiatorDid;
     const session: RuntimeHostSession = { id: first.sessionId, localDid: this.localDid, peerDid: other, state: 'authenticated', expiresAt: first.expiresAt, binding: { serviceRef: scope.serviceRef, protocol: scope.protocol, protocolVersion: scope.protocolVersion } };
+    if (!this.sessions.has(session.id) && this.sessions.size >= 1000) throw new RuntimeError('session_capacity_exceeded');
     this.sessions.set(session.id, session);
     return structuredClone(session);
   }
 
   async verify(input: { envelope: unknown; audience: string; requestId: string; payloadDigest: string; callbackDid?: string }): Promise<Record<string, unknown>> {
+    this.prune();
+    if (this.verifiedRequests.size >= 10000) throw new RuntimeError('request_capacity_exceeded');
     const envelope = input.envelope as Record<string, unknown>;
     const message = envelope?.message as SignedMessage | undefined;
     const sessionId = typeof envelope?.sessionId === 'string' ? envelope.sessionId : message?.context?.sessionId;
@@ -69,8 +81,13 @@ export class RuntimeHostVerifier {
     if (!session || Date.parse(session.expiresAt) <= Date.now() || session.peerDid !== message.context.senderDid || session.binding.protocol !== message.context.protocol || session.binding.protocolVersion !== message.protocolVersion || session.binding.serviceRef !== message.serviceRef || message.context.purpose !== 'request') throw new RuntimeError('session_not_authenticated');
     const payload = message.payload as Record<string, unknown>;
     if (this.scope && (payload?.runId !== this.scope.runId || payload?.tenantId !== this.scope.tenantId || envelope.tenantId !== this.scope.tenantId)) throw new RuntimeError('message_binding_mismatch');
+    if (this.scope) {
+      const http = payload.httpBinding as Record<string, unknown> | undefined;
+      if (!http || typeof http.method !== 'string' || typeof http.target !== 'string' || typeof http.mcpSessionId !== 'string') throw new RuntimeError('http_request_binding_required');
+    }
     if (payload?.rawBodyDigest !== input.payloadDigest) throw new RuntimeError('payload_digest_mismatch');
     const peer = await this.resolvePeer(message.context.senderDid);
+    if (peer.did !== session.peerDid || !Number.isFinite(peer.validUntil) || peer.validUntil <= Date.now()) throw new RuntimeError('session_evidence_expired');
     await verifyPinnedMessage(message, {
       senderDid: message.context.senderDid, audienceDid: this.localDid,
       verificationMethod: peer.verificationMethod, publicKeyJwk: peer.publicKeyJwk,
@@ -79,7 +96,11 @@ export class RuntimeHostVerifier {
       sessionId, requestId: input.requestId, purpose: message.context.purpose,
       protocol: message.context.protocol, replay: this.replay,
     });
-    this.verifiedRequests.set(input.requestId, { peerDid: message.context.senderDid, payloadDigest: input.payloadDigest, expiresAt: Math.min(Date.parse(message.context.expiresAt), Date.parse(session.expiresAt)) });
+    const requestKey = JSON.stringify([input.requestId, message.context.senderDid]);
+    // Check after asynchronous verification too: a fresh nonce must not replace
+    // an in-flight response-signing receipt for the same peer/request ID.
+    if (this.verifiedRequests.has(requestKey)) throw new RuntimeError('request_already_in_flight');
+    this.verifiedRequests.set(requestKey, { peerDid: message.context.senderDid, payloadDigest: input.payloadDigest, expiresAt: Math.min(Date.parse(message.context.expiresAt), Date.parse(session.expiresAt)) });
     return {
       subjectDid: message.context.senderDid, audienceDid: this.localDid,
       requestId: input.requestId, payloadDigest: input.payloadDigest,
@@ -91,9 +112,11 @@ export class RuntimeHostVerifier {
     if (!intent || typeof intent !== 'object' || Array.isArray(intent)) throw new RuntimeError('invalid_response_intent');
     const fields = intent as Record<string, unknown>;
     if (!['gateway-response', 'sidecar-response'].includes(String(fields.kind)) || typeof fields.requestId !== 'string' || !fields.requestId || !/^sha256:[0-9a-f]{64}$/.test(String(fields.payloadDigest)) || !/^sha256:[0-9a-f]{64}$/.test(String(fields.requestPayloadDigest)) || fields.targetResourceDid !== this.localDid || typeof fields.audienceDid !== 'string' || !fields.audienceDid || !Number.isInteger(fields.status) || Number(fields.status) < 100 || Number(fields.status) > 599) throw new RuntimeError('invalid_response_intent');
-    const verified = this.verifiedRequests.get(fields.requestId as string);
+    this.prune();
+    const requestKey = JSON.stringify([fields.requestId, fields.audienceDid]);
+    const verified = this.verifiedRequests.get(requestKey);
     if (!verified || verified.expiresAt <= Date.now() || verified.peerDid !== fields.audienceDid || verified.payloadDigest !== fields.requestPayloadDigest) throw new RuntimeError('response_request_unverified');
-    this.verifiedRequests.delete(fields.requestId as string);
+    this.verifiedRequests.delete(requestKey);
     const envelope = { ...(intent as Record<string, unknown>), senderDid: this.localDid, verificationMethod: this.signer.keyId };
     const protectedHeader = base64url.encode(JSON.stringify({ alg: 'EdDSA', kid: this.signer.keyId, typ: 'oan-native-response+jws' }));
     const payload = base64url.encode(canonicalJson(envelope));
@@ -131,6 +154,7 @@ export async function verifyNativeResponseProof(input: {
   const envelope = signed?.envelope as Record<string, unknown> | undefined;
   const signature = signed?.signature;
   const peer = await input.resolvePeer(input.expected.senderDid);
+  if (peer.did !== input.expected.senderDid || !Number.isFinite(peer.validUntil) || peer.validUntil <= Date.now()) throw new RuntimeError('response_peer_evidence_invalid');
   const payloadDigest = `sha256:${createHash('sha256').update(input.responseBody).digest('hex')}`;
   if (!envelope || envelope.kind !== input.expected.kind || envelope.senderDid !== input.expected.senderDid || envelope.audienceDid !== input.expected.audienceDid || envelope.targetResourceDid !== input.expected.targetResourceDid || envelope.requestId !== input.expected.requestId || envelope.requestPayloadDigest !== input.expected.requestPayloadDigest || envelope.payloadDigest !== payloadDigest || envelope.status !== input.status || signature?.verificationMethod !== peer.verificationMethod || typeof signature?.value !== 'string') throw new RuntimeError('response_proof_binding_invalid');
   try {
