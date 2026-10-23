@@ -97,3 +97,10 @@ incrementally for provisional display.
 Runtime owns identity and cryptography; Sidecar owns resource ingress; Gateway
 owns deployment/tenant routing. Registration/discovery remain SDK/Skill workflows.
 The demo reference composes these APIs and does not constitute a Runtime dependency.
+
+`openRegisteredActor` accepts optional trusted-host `tenantId`, `callerId` and
+`policyRules`. Defaults retain `oan-reference`, the identity reference as caller,
+and the existing per-request policy. Explicit rules are snapshotted at startup
+and must match caller, tenant, identity, peer, protocol and operation; `[]` denies
+all signing. These options come from local trusted configuration, never peer
+request data. The optional `runId` binds an isolated run within that tenant.

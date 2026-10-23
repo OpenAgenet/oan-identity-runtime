@@ -15,7 +15,21 @@ import { PinnedRootEvidenceVerifier } from '../evidence/pinned-root.js';
 import { MemoryAuditSink } from '../audit/index.js';
 import { RuntimeHostVerifier, type RuntimeHostSessionProof } from './runtime-host.js';
 import { IdentityRuntime } from '../runtime.js';
-import { PolicyEngine } from '../policy/index.js';
+import { PolicyEngine, type PolicyRule } from '../policy/index.js';
+
+/** Snapshot trusted configuration before registration I/O or caller mutation. */
+export function registeredActorPolicy(config: { identityRef: string; tenantId?: string; callerId?: string; policyRules?: readonly PolicyRule[] }) {
+  const caller = Object.freeze({ callerId: config.callerId ?? config.identityRef, tenantId: config.tenantId ?? 'oan-reference' });
+  if (typeof caller.callerId !== 'string' || !caller.callerId.trim() || typeof caller.tenantId !== 'string' || !caller.tenantId.trim()) throw new Error('runtime_actor_context_invalid');
+  if (config.policyRules !== undefined && (!Array.isArray(config.policyRules) || config.policyRules.some(rule =>
+    !rule || ['callerId', 'identityRef', 'audienceDid', 'operation'].some(key => typeof rule[key as keyof PolicyRule] !== 'string' || !(rule[key as keyof PolicyRule] as string).trim())
+    || (rule.tenantId !== undefined && (typeof rule.tenantId !== 'string' || !rule.tenantId.trim()))
+    || !['request', 'response', 'challenge', 'event'].includes(rule.purpose) || !['http', 'a2a', 'mcp'].includes(rule.protocol)))) throw new Error('runtime_actor_policy_invalid');
+  const configured = config.policyRules === undefined ? undefined : new PolicyEngine(config.policyRules);
+  const identityRef = config.identityRef;
+  return { caller, forRequest: (audienceDid: string, protocol: PolicyRule['protocol'], operation: string) =>
+    configured ?? new PolicyEngine([{ ...caller, identityRef, audienceDid, purpose: 'request', protocol, operation }]) };
+}
 
 /** Trusted actor-side composition. No network caller may supply paths, pins or keys. */
 export async function openRegisteredActor(config: {
@@ -23,7 +37,14 @@ export async function openRegisteredActor(config: {
   resourcePackage: any; discoveryUrl: string; pins: any; vaultPath: string; masterKey: Uint8Array;
   resolvePackage(did: string): Promise<any>;
   runId?: string;
+  /** Trusted host configuration only. Omitted rules retain the existing
+   * per-request policy; an explicit empty list denies every request. */
+  tenantId?: string;
+  callerId?: string;
+  policyRules?: readonly PolicyRule[];
 }) {
+  config = { ...config };
+  const policyConfig = registeredActorPolicy(config), caller = policyConfig.caller;
   const read = async (path: string) => JSON.parse(await readFile(path, 'utf8'));
   const document = await read(config.didDocumentPath);
   await mkdir(dirname(config.vaultPath), { recursive: true, mode: 0o700 });
@@ -31,7 +52,6 @@ export async function openRegisteredActor(config: {
   const keys = new EncryptedKeyProvider(store);
   try {
   keys.unlock(config.masterKey);
-  const caller = { callerId: config.identityRef, tenantId: 'oan-reference' };
   const vault = new LocalIdentityVault(keys, new MemoryAuditSink(), {
     rootDid: config.pins.anchor.rootDid,
     verifier: new PinnedRootEvidenceVerifier(config.pins.anchor, new Date().toISOString(), 300_000,
@@ -64,8 +84,7 @@ export async function openRegisteredActor(config: {
     async signRequest(proof: RuntimeHostSessionProof, requestId: string, rawBodyDigest: string, operation: string,
       httpBinding?: { method: string; target: string; mcpSessionId: string }) {
       const session = await host.addVerifiedSession(proof);
-      const policy = new PolicyEngine([{ ...caller, identityRef: config.identityRef,
-        audienceDid: session.peerDid, purpose: 'request', protocol: proof.scope.protocol, operation }]);
+      const policy = policyConfig.forRequest(session.peerDid, proof.scope.protocol, operation);
       const runtime = new IdentityRuntime({ catalog: vault, keys: { resolve: ref => keys.getSigner(ref) },
         policy, sessions: { requireAuthenticated: async (id, local, peer) => {
           if (id !== session.id || local !== session.localDid || peer !== session.peerDid) throw new Error('session_scope_mismatch');
