@@ -83,11 +83,16 @@ export function createAuthenticatedRuntimeIpc(options: {
           // Rust Option serializes an absent callback as null; normalize only
           // this optional field before applying the same strict validation.
           if (request.callbackDid === null) delete request.callbackDid;
+          // Rust's Option<String> may be encoded as either null or omitted by
+          // older compatible connectors. Normalize the optional tenant before
+          // applying the authenticated caller binding; never infer a tenant
+          // from the network payload.
+          if (request.expectedTenantId === undefined) request.expectedTenantId = null;
           const supplied = Buffer.from(typeof request.bearer === 'string' ? request.bearer : '');
           const expected = Buffer.from(options.token);
           if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected) || request.version !== 'oan-runtime-ipc-v1' || !['verify_request', 'verify_callback', 'sign_request'].includes(request.operation)) throw new Error('ipc_schema_invalid');
           if (request.operation === 'sign_request') {
-            if (!options.sign || request.intent === undefined || request.expectedCallerId !== options.callerId || request.expectedTenantId !== (options.tenantId ?? null)) throw new Error('ipc_schema_invalid');
+            if (!options.sign || request.intent === undefined || request.expectedCallerId !== options.callerId || (request.expectedTenantId ?? null) !== (options.tenantId ?? null)) throw new Error('ipc_schema_invalid');
             const inputDigest = signInputDigest(request.intent, options.callerId, options.tenantId);
             const signed = await options.sign(structuredClone(request.intent));
             socket.end(JSON.stringify({ version:'oan-runtime-ipc-v1', callerId:options.callerId, tenantId:options.tenantId ?? null, signed, inputDigest })+'\n'); return;
