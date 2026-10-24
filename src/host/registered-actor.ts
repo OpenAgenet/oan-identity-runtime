@@ -16,6 +16,7 @@ import { MemoryAuditSink } from '../audit/index.js';
 import { RuntimeHostVerifier, type RuntimeHostSessionProof } from './runtime-host.js';
 import { IdentityRuntime } from '../runtime.js';
 import { PolicyEngine, type PolicyRule } from '../policy/index.js';
+import { snapshotRequestScope, requireNativeHttpBinding } from './request-context.js';
 
 /** Snapshot trusted configuration before registration I/O or caller mutation. */
 export function registeredActorPolicy(config: { identityRef: string; tenantId?: string; callerId?: string; policyRules?: readonly PolicyRule[] }) {
@@ -36,7 +37,11 @@ export async function openRegisteredActor(config: {
   identityRef: string; identityPath: string; didDocumentPath: string; registrationVcPath: string;
   resourcePackage: any; discoveryUrl: string; pins: any; vaultPath: string; masterKey: Uint8Array;
   resolvePackage(did: string): Promise<any>;
+  /** Compatibility alias; new hosts should use requestContext. */
   runId?: string;
+  /** Opaque application binding, snapshotted from trusted host configuration. */
+  requestContext?: Readonly<Record<string, string>>;
+  requireHttpBinding?: boolean;
   /** Host-only lease for a long multi-actor bootstrap. The secure default
    * remains five minutes; callers must opt in explicitly for registration
    * runs that can exceed that window. */
@@ -50,9 +55,12 @@ export async function openRegisteredActor(config: {
   policyRules?: readonly PolicyRule[];
 }) {
   config = { ...config };
+  const policyConfig = registeredActorPolicy(config), caller = policyConfig.caller;
+  const requestScope = snapshotRequestScope({ tenantId: caller.tenantId, runId: config.runId,
+    requestContext: config.requestContext, requireHttpBinding: config.requireHttpBinding });
+  const scoped = config.runId !== undefined || config.requestContext !== undefined || config.requireHttpBinding !== undefined;
   const evidenceMaxAgeMs = config.evidenceMaxAgeMs ?? 300_000;
   if (!Number.isInteger(evidenceMaxAgeMs) || evidenceMaxAgeMs < 60_000 || evidenceMaxAgeMs > 3_600_000) throw new Error("runtime_evidence_window_invalid");
-  const policyConfig = registeredActorPolicy(config), caller = policyConfig.caller;
   const read = async (path: string) => JSON.parse(await readFile(path, 'utf8'));
   const document = await read(config.didDocumentPath);
   await mkdir(dirname(config.vaultPath), { recursive: true, mode: 0o700 });
@@ -86,13 +94,14 @@ export async function openRegisteredActor(config: {
       observedAt: new Date().toISOString(), maxAgeMs: evidenceMaxAgeMs }), did };
   };
   const replay = new SqliteReplayStore(`${config.vaultPath}.replay`);
-  const host = new RuntimeHostVerifier(record.did, signer, resolvePeer, replay, config.runId ? { runId: config.runId, tenantId: caller.tenantId } : undefined);
+  const host = new RuntimeHostVerifier(record.did, signer, resolvePeer, replay, scoped ? requestScope : undefined);
   const handshake = new MutualHandshake(record.did, signer, resolvePeer);
   return {
-    did: record.did, host, handshake, resolvePeer,
+    did: record.did, tenantId: caller.tenantId, host, handshake, resolvePeer,
     async installSession(proof: RuntimeHostSessionProof) { return host.addVerifiedSession(proof); },
     async signRequest(proof: RuntimeHostSessionProof, requestId: string, rawBodyDigest: string, operation: string,
       httpBinding?: { method: string; target: string; mcpSessionId: string }) {
+      if (requestScope.requireHttpBinding) requireNativeHttpBinding(httpBinding);
       const session = await host.addVerifiedSession(proof);
       const policy = policyConfig.forRequest(session.peerDid, proof.scope.protocol, operation);
       const runtime = new IdentityRuntime({ catalog: vault, keys: { resolve: ref => keys.getSigner(ref) },
@@ -102,7 +111,7 @@ export async function openRegisteredActor(config: {
         } }, audit: new MemoryAuditSink() });
       return runtime.signIntent(caller, { identityRef: config.identityRef, audienceDid: session.peerDid,
         purpose: 'request', protocol: proof.scope.protocol, protocolVersion: proof.scope.protocolVersion,
-        serviceRef: proof.scope.serviceRef, sessionId: session.id, requestId, operation, payload: { rawBodyDigest, ...(httpBinding ? { httpBinding } : {}), ...(config.runId ? { runId: config.runId, tenantId: caller.tenantId } : {}) } });
+        serviceRef: proof.scope.serviceRef, sessionId: session.id, requestId, operation, payload: { rawBodyDigest, ...(httpBinding ? { httpBinding } : {}), ...requestScope.requestContext, ...(scoped ? { ...(requestScope.runId ? { runId: requestScope.runId } : {}), tenantId: caller.tenantId } : {}) } });
     },
     close() { keys.lock(); replay.close(); store.close(); },
   };

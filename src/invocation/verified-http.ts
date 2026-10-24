@@ -55,7 +55,7 @@ export function createVerifiedHttpFetch(options: {
     signal.throwIfAborted();
     await verify({ requestId, body: bytes, headers: new Headers(response.headers), status: response.status });
     signal.throwIfAborted();
-    const native = response.headers.get('content-type')?.startsWith('text/event-stream') ? splitNativeStreamProof(bytes).body : bytes;
+    const native = response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream') ? splitNativeStreamProof(bytes).body : bytes;
     const cleanHeaders = new Headers(response.headers);
     for (const name of ['content-length', 'transfer-encoding', 'content-encoding', 'x-oan-response-envelope']) cleanHeaders.delete(name);
     return new Response([204, 205, 304].includes(response.status) ? null : new Uint8Array(native), { status: response.status, statusText: response.statusText, headers: cleanHeaders });

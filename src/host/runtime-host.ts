@@ -13,6 +13,7 @@ import type { HandshakeMessage, HandshakeScope } from '../session/handshake.js';
 import { digestJson, verifyPinnedMessage } from '../verification/index.js';
 import { RuntimeError } from '../errors.js';
 import { canonicalJson } from '@openagenet/oan-sdk-ts';
+import { snapshotRequestScope, requireNativeHttpBinding, type HostRequestScope } from './request-context.js';
 
 export interface RuntimeHostSession extends SessionRecord {
   binding: { serviceRef: string; protocol: 'a2a' | 'mcp' | 'http'; protocolVersion: string };
@@ -20,10 +21,9 @@ export interface RuntimeHostSession extends SessionRecord {
 export interface RuntimeHostSessionProof { scope: HandshakeScope; transcript: [HandshakeMessage, HandshakeMessage, HandshakeMessage, HandshakeMessage] }
 
 /**
- * The network-facing host implementation used by the Ubuntu reference runner.
- * It deliberately contains no HTTP listener: Gateway and Sidecar are the only
- * network listeners, while this class is reachable through authenticated local
- * IPC. A request is accepted only when its signed message, pinned peer key,
+ * Transport-independent verifier for host-configured resource identities.
+ * It contains no listener or process manager. A host may embed it or expose it
+ * through authenticated local IPC. A request is accepted only when its signed message, pinned peer key,
  * session scope and durable replay store all agree.
  */
 export class RuntimeHostVerifier {
@@ -34,8 +34,24 @@ export class RuntimeHostVerifier {
     readonly signer: OanSigner,
     readonly resolvePeer: (did: string) => Promise<VerifiedPeer>,
     readonly replay: ReplayStore,
-    readonly scope?: { runId: string; tenantId: string },
-  ) {}
+    readonly scope?: Readonly<HostRequestScope>,
+  ) {
+    if (scope) {
+      this.scope = snapshotRequestScope(scope);
+    }
+  }
+
+  private verifyHostContext(payload: Record<string, any>, envelope: Record<string, any>): void {
+    if (!this.scope) return;
+    // runId is a compatibility alias only. New hosts provide opaque application
+    // bindings without teaching Runtime about runs, tasks or scenario topology.
+    const expected = { ...(this.scope.runId ? { runId: this.scope.runId } : {}), ...this.scope.requestContext };
+    if (payload?.tenantId !== this.scope.tenantId || envelope.tenantId !== this.scope.tenantId
+      || Object.entries(expected).some(([key, value]) => payload?.[key] !== value)) throw new RuntimeError('message_binding_mismatch');
+    if (this.scope.requireHttpBinding ?? Boolean(this.scope.runId)) {
+      requireNativeHttpBinding(payload?.httpBinding);
+    }
+  }
 
   private prune(): void {
     const now = Date.now();
@@ -80,11 +96,7 @@ export class RuntimeHostVerifier {
     const session = this.sessions.get(sessionId);
     if (!session || Date.parse(session.expiresAt) <= Date.now() || session.peerDid !== message.context.senderDid || session.binding.protocol !== message.context.protocol || session.binding.protocolVersion !== message.protocolVersion || session.binding.serviceRef !== message.serviceRef || message.context.purpose !== 'request') throw new RuntimeError('session_not_authenticated');
     const payload = message.payload as Record<string, unknown>;
-    if (this.scope && (payload?.runId !== this.scope.runId || payload?.tenantId !== this.scope.tenantId || envelope.tenantId !== this.scope.tenantId)) throw new RuntimeError('message_binding_mismatch');
-    if (this.scope) {
-      const http = payload.httpBinding as Record<string, unknown> | undefined;
-      if (!http || typeof http.method !== 'string' || typeof http.target !== 'string' || typeof http.mcpSessionId !== 'string') throw new RuntimeError('http_request_binding_required');
-    }
+    this.verifyHostContext(payload, envelope);
     if (payload?.rawBodyDigest !== input.payloadDigest) throw new RuntimeError('payload_digest_mismatch');
     const peer = await this.resolvePeer(message.context.senderDid);
     if (peer.did !== session.peerDid || !Number.isFinite(peer.validUntil) || peer.validUntil <= Date.now()) throw new RuntimeError('session_evidence_expired');
@@ -138,8 +150,7 @@ export class RuntimeHostVerifier {
       || message.serviceRef !== session.binding.serviceRef || message.protocolVersion !== session.binding.protocolVersion
       || (message.payload as any)?.rawBodyDigest !== input.payloadDigest) throw new RuntimeError('message_binding_mismatch');
     const payload = message.payload as any;
-    if (this.scope && (payload.runId !== this.scope.runId || payload.tenantId !== this.scope.tenantId || envelope.tenantId !== this.scope.tenantId
-      || typeof payload.httpBinding?.method !== 'string' || typeof payload.httpBinding?.target !== 'string' || typeof payload.httpBinding?.mcpSessionId !== 'string')) throw new RuntimeError('message_binding_mismatch');
+    this.verifyHostContext(payload, envelope);
     const local = await this.resolvePeer(this.localDid);
     await verifyPinnedMessage(message, { senderDid: this.localDid, audienceDid: input.audience, verificationMethod: local.verificationMethod,
       publicKeyJwk: local.publicKeyJwk, serviceRef: session.binding.serviceRef, protocolVersion: session.binding.protocolVersion,

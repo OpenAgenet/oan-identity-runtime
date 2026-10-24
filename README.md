@@ -56,7 +56,7 @@ G3/G4 add `DurableIdentityVerification`, `SynchronousInvocation` and `NativeSync
 
 Sessions currently expire after 60 seconds. Inspect returns local state and the last public outgoing message for recovery; exact final confirmation may be resent without creating a new session. Durable nonce storage and operation receipts reject duplicate effects, including a new nonce for the same operation ID. A dispatched call with an unknown outcome is never automatically resent; reconcile using its local receipt. Provider/master-key custody remains host-owned and is never configured from peer input.
 
-Streams, task retrieval/cancel/callback protection, Sidecar, Gateway and full Hermes outbound integration remain G5–G7 work. Pinned Root snapshots do not establish live chain/revocation status. Detailed design and development evidence are maintained in `oan-design-docs`. Runtime production code never imports the integration lab. Source code uses English by default.
+Protected HTTP/SSE, Sidecar/Gateway and Hermes-hosted A2A/MCP paths have been exercised in reference integration deployments. The synchronous A2A handler wrapper still rejects unsupported operations; this evidence does not imply every transport or asynchronous operation has a turnkey adapter. Pinned Root snapshots do not establish live chain/revocation status. Detailed design and development evidence are maintained in `oan-design-docs`. Runtime production code never imports the integration lab. Source code uses English by default.
 
 ## Embedding the synchronous boundary
 
@@ -104,3 +104,57 @@ and the existing per-request policy. Explicit rules are snapshotted at startup
 and must match caller, tenant, identity, peer, protocol and operation; `[]` denies
 all signing. These options come from local trusted configuration, never peer
 request data. The optional `runId` binds an isolated run within that tenant.
+
+## Adoption boundary and native response proof profile
+
+L0 uses the community Skill or SDK without this Runtime. For local custody and
+independent mutual verification, configure Runtime with your own identities,
+trust pins and caller/peer policy. For L2, wrap the selected native protocol
+boundary or use an external Sidecar; add Gateway only when routing requires it.
+The host owns handshake transport and business authorization. No demo launcher,
+scenario graph, process manager, fixed port or server account is required.
+
+`createNativeProofHttpFetch` composes the existing bounded fetch boundary with
+native Gateway/Sidecar response-proof verification. Supply the endpoint, allowed
+methods, local/peer DIDs, explicit `responseProofKind`, verified peer resolver,
+and a host-controlled request signer. It computes and binds the exact request
+body digest and verifies the actual response bytes/status/correlation before
+returning them to the native SDK. `onVerified` exposes a public receipt only.
+The endpoint and proof kind come from trusted route configuration, not response
+claims. No automatic registration, peer selection, authorization or retry occurs.
+See [examples/native-proof-client.mjs](examples/native-proof-client.mjs) for an
+independent fetch-hook composition. It uses your own trusted host module and
+requires no demo repository. SSE is buffered until its terminal proof succeeds;
+this is not per-event authenticated live delivery.
+
+New hosts may pass opaque `requestContext` bindings and `requireHttpBinding` to
+`openRegisteredActor` / `RuntimeHostVerifier`. Runtime compares these configured
+values without interpreting business tasks. Reserved digest/HTTP/tenant fields
+cannot be overridden. `runId` and the `oan-reference` default tenant are retained
+only for compatibility; new deployments should set their own caller, tenant and
+explicit `policyRules` (an empty list denies signing). Omitted rules retain the
+legacy trusted-host per-request behavior, not a business authorization policy.
+Run-specific values and task-derived ACLs belong to the application.
+
+The CLI's default public tools remain L0 only. Private tools require a trusted
+host configuration; exposing Runtime as an MCP tool does not protect another
+MCP server. The current standalone host loads supplied evidence/session files;
+it is not an application orchestrator or a turnkey dynamic bootstrap service.
+Source-workspace installation is currently required (`private: true` with a
+sibling SDK dependency); this is distinct from public npm availability.
+
+For a registered actor, prefer `createActorNativeHttpFetch({ actor, session,
+endpoint, methods, responseProofKind, operation })`. It reuses the actor's
+verified resolver and policy-controlled `signRequest`, builds the native request
+headers, and binds HTTP method/target/MCP session automatically. `operation` is
+an explicit string or a trusted native-request mapper; the host chooses the
+mapping and its allowlist. The adapter never derives permissions from response
+claims or a task graph. Establish the verified session using the existing
+transport-independent handshake first. Session expiry requires an explicit new
+handshake; business requests are never automatically retried.
+
+`requestContext` is bounded and snapshotted, accepts only plain string maps,
+and cannot override protocol digest/HTTP/tenant fields. Conflicting legacy
+`runId` values are rejected. With `requireHttpBinding`, an incomplete binding
+is rejected at signing as well as verification. These checks do not implement
+application business authorization.

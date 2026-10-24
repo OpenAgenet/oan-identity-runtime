@@ -43,6 +43,13 @@ test('formal Runtime host verifies a signed request against a bound session and 
   }
   const invalidEvidence = new RuntimeHostVerifier(identity.did, signer, async did => ({ ...await resolvePeer(did), validUntil: NaN }), new ReplayCache());
   await assert.rejects(invalidEvidence.addVerifiedSession(validProof), /session_transcript_unverified/);
+  const opaqueContext = { workspace: 'independent-workspace' };
+  const independent = new RuntimeHostVerifier(identity.did, signer, resolvePeer, new ReplayCache(),
+    { tenantId: 'independent-tenant', requestContext: opaqueContext, requireHttpBinding: true });
+  opaqueContext.workspace = 'mutated';
+  assert.equal(independent.scope?.requestContext?.workspace, 'independent-workspace');
+  assert.throws(() => new RuntimeHostVerifier(identity.did, signer, resolvePeer, new ReplayCache(),
+    { tenantId: 'team', requestContext: { rawBodyDigest: 'override' } }), /invalid_host_request_context/);
   const rawBodyDigest = `sha256:${'a'.repeat(64)}`;
   const message = { context: { profile: 'oan-message-v1', senderDid: peer.did, audienceDid: identity.did, purpose: 'request', protocol: 'mcp', sessionId: hello.body.sessionId, messageId: 'm-1', requestId: 'request-1', nonce: 'nonce-1', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30000).toISOString(), payloadDigest: 'sha256:placeholder' }, operation: 'tools/call', serviceRef: scope.serviceRef, protocolVersion: '2025-11-25', payload: { rawBodyDigest }, signature: { verificationMethod: peer.verificationMethod, value: '' } } as any;
   const { digestJson } = await import('../src/verification/index.js');
@@ -64,6 +71,18 @@ test('formal Runtime host verifies a signed request against a bound session and 
   peers.get(other.did)!.validUntil = Date.now() - 1;
   await assert.rejects(host.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest }), /session_evidence_expired/);
   peers.get(other.did)!.validUntil = oldExpiry;
+  await independent.addVerifiedSession(validProof);
+  await assert.rejects(independent.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message,
+    tenantId: 'independent-tenant' }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest }), /message_binding_mismatch/);
+  const contextual = structuredClone(message);
+  contextual.payload = { rawBodyDigest, workspace: 'independent-workspace', tenantId: 'independent-tenant',
+    httpBinding: { method: 'POST', target: '/native', mcpSessionId: '' } };
+  contextual.context.payloadDigest = await digestJson(contextual.payload);
+  const contextBytes = Buffer.from(canonicalJson({ context: contextual.context, operation: contextual.operation,
+    serviceRef: contextual.serviceRef, protocolVersion: contextual.protocolVersion, payload: contextual.payload })).toString('base64url');
+  contextual.signature.value = `${header}.${contextBytes}.${Buffer.from(await otherSigner.signPreparedInput(new TextEncoder().encode(`${header}.${contextBytes}`))).toString('base64url')}`;
+  assert.equal((await independent.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId,
+    message: contextual, tenantId: 'independent-tenant' }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest })).subjectDid, other.did);
   const result = await host.verify({ envelope: { targetResourceDid: identity.did, sessionId: hello.body.sessionId, message }, audience: identity.did, requestId: 'request-1', payloadDigest: rawBodyDigest });
   assert.equal(result.subjectDid, peer.did);
   const concurrent = structuredClone(message);
