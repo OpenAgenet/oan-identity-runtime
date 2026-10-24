@@ -64,6 +64,7 @@ export function createAuthenticatedRuntimeIpc(options: {
   socketMode?: number;
 }) {
   if (Buffer.byteLength(options.token) < 32 || !options.callerId) throw new Error('ipc_token_or_caller_invalid');
+  console.error(JSON.stringify({ code: 'runtime_ipc_ready', callerId: options.callerId, tenantId: options.tenantId ?? null, hasSigner: Boolean(options.sign) }));
   const server = createServer(socket => {
     let bytes = Buffer.alloc(0), handled = false;
     socket.setTimeout(5000, () => socket.destroy());
@@ -92,7 +93,18 @@ export function createAuthenticatedRuntimeIpc(options: {
           const expected = Buffer.from(options.token);
           if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected) || request.version !== 'oan-runtime-ipc-v1' || !['verify_request', 'verify_callback', 'sign_request'].includes(request.operation)) throw new Error('ipc_schema_invalid');
           if (request.operation === 'sign_request') {
-            if (!options.sign || request.intent === undefined || request.expectedCallerId !== options.callerId || (request.expectedTenantId ?? null) !== (options.tenantId ?? null)) throw new Error('ipc_schema_invalid');
+            if (!options.sign || request.intent === undefined || request.expectedCallerId !== options.callerId || (request.expectedTenantId ?? null) !== (options.tenantId ?? null)) {
+              // Keep the diagnostic bounded and secret-free. This is needed
+              // to distinguish a caller/tenant binding mismatch from a
+              // malformed frame while debugging a real cross-process host.
+              console.error(JSON.stringify({
+                code: 'ipc_schema_invalid', operation: request.operation,
+                hasSigner: Boolean(options.sign), hasIntent: request.intent !== undefined,
+                callerMatch: request.expectedCallerId === options.callerId,
+                tenantMatch: (request.expectedTenantId ?? null) === (options.tenantId ?? null),
+              }));
+              throw new Error('ipc_schema_invalid');
+            }
             const inputDigest = signInputDigest(request.intent, options.callerId, options.tenantId);
             const signed = await options.sign(structuredClone(request.intent));
             socket.end(JSON.stringify({ version:'oan-runtime-ipc-v1', callerId:options.callerId, tenantId:options.tenantId ?? null, signed, inputDigest })+'\n'); return;
